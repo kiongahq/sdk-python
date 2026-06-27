@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from .models import PipelineRun, Project
+from .models import Agent, AuditEvent, Connection, Model, PipelineRun, Project, Tool
 
 
 class MLAIOpsClient:
@@ -13,10 +13,13 @@ class MLAIOpsClient:
         base_url: str = "http://localhost:8080",
         *,
         token: str | None = None,
+        actor: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if actor:
+            headers["X-MLAIOps-Actor"] = actor
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers=headers,
@@ -66,6 +69,120 @@ class MLAIOpsClient:
             json={"project_id": project_id, "name": name},
         )
         return PipelineRun.model_validate(data)
+
+    def list_models(self) -> list[Model]:
+        return [Model.model_validate(item) for item in self._page("/api/v1/models")]
+
+    def register_model(
+        self,
+        project_id: str,
+        name: str,
+        version: str,
+        artifact_uri: str,
+        *,
+        metrics: dict[str, float] | None = None,
+    ) -> Model:
+        data = self._request(
+            "POST",
+            "/api/v1/models",
+            json={
+                "project_id": project_id,
+                "name": name,
+                "version": version,
+                "artifact_uri": artifact_uri,
+                "metrics": metrics or {},
+            },
+        )
+        return Model.model_validate(data)
+
+    def promote_model(self, model_id: str, stage: str) -> Model:
+        return Model.model_validate(
+            self._request("POST", f"/api/v1/models/{model_id}/promote", json={"stage": stage})
+        )
+
+    def list_agents(self) -> list[Agent]:
+        return [Agent.model_validate(item) for item in self._page("/api/v1/agents")]
+
+    def deploy_agent(
+        self,
+        project_id: str,
+        name: str,
+        version: str,
+        image: str,
+        graph_module: str,
+        *,
+        llm_backend: str = "self-hosted",
+        replicas: int = 1,
+        tools: list[str] | None = None,
+    ) -> Agent:
+        data = self._request(
+            "POST",
+            "/api/v1/agents",
+            json={
+                "project_id": project_id,
+                "name": name,
+                "version": version,
+                "image": image,
+                "graph_module": graph_module,
+                "llm_backend": llm_backend,
+                "replicas": replicas,
+                "tools": tools or [],
+            },
+        )
+        return Agent.model_validate(data)
+
+    def set_agent_traffic(self, agent_id: str, canary_weight: int) -> Agent:
+        return Agent.model_validate(
+            self._request(
+                "PUT",
+                f"/api/v1/agents/{agent_id}/traffic",
+                json={"canary_weight": canary_weight},
+            )
+        )
+
+    def list_tools(self) -> list[Tool]:
+        return [Tool.model_validate(item) for item in self._page("/api/v1/tools")]
+
+    def register_tool(
+        self,
+        name: str,
+        version: str,
+        description: str,
+        input_schema: dict,
+        *,
+        tags: list[str] | None = None,
+    ) -> Tool:
+        data = self._request(
+            "POST",
+            "/api/v1/tools",
+            json={
+                "name": name,
+                "version": version,
+                "description": description,
+                "input_schema": input_schema,
+                "tags": tags or [],
+            },
+        )
+        return Tool.model_validate(data)
+
+    def list_connections(self) -> list[Connection]:
+        return [Connection.model_validate(item) for item in self._page("/api/v1/connections")]
+
+    def create_connection(
+        self, name: str, type: str, secret_ref: str, *, endpoint: str = ""
+    ) -> Connection:
+        data = self._request(
+            "POST",
+            "/api/v1/connections",
+            json={"name": name, "type": type, "secret_ref": secret_ref, "endpoint": endpoint},
+        )
+        return Connection.model_validate(data)
+
+    def audit_events(self) -> list[AuditEvent]:
+        return [AuditEvent.model_validate(item) for item in self._page("/api/v1/audit")]
+
+    def _page(self, path: str) -> list[dict]:
+        return self._request("GET", path)["items"]
 
     def _request(self, method: str, path: str, **kwargs: object):
         response = self._client.request(method, path, **kwargs)
