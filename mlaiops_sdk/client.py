@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import httpx
 
-from .models import Agent, AuditEvent, Connection, Model, PipelineRun, Project, Tool
+from .models import (
+    Agent,
+    AgentSession,
+    AgentTrace,
+    AuditEvent,
+    Connection,
+    Model,
+    PipelineRun,
+    Project,
+    Readiness,
+    Tool,
+)
 
 
 class MLAIOpsClient:
@@ -62,6 +73,19 @@ class MLAIOpsClient:
             for item in self._request("GET", "/api/v1/pipelines/runs")
         ]
 
+    def get_pipeline_run(self, run_id: str) -> PipelineRun:
+        return PipelineRun.model_validate(self._request("GET", f"/api/v1/pipelines/runs/{run_id}"))
+
+    def cancel_pipeline_run(self, run_id: str) -> PipelineRun:
+        return PipelineRun.model_validate(
+            self._request("POST", f"/api/v1/pipelines/runs/{run_id}/cancel", json={})
+        )
+
+    def retry_pipeline_run(self, run_id: str) -> PipelineRun:
+        return PipelineRun.model_validate(
+            self._request("POST", f"/api/v1/pipelines/runs/{run_id}/retry", json={})
+        )
+
     def submit_pipeline(self, project_id: str, name: str = "training-pipeline") -> PipelineRun:
         data = self._request(
             "POST",
@@ -98,6 +122,20 @@ class MLAIOpsClient:
     def promote_model(self, model_id: str, stage: str) -> Model:
         return Model.model_validate(
             self._request("POST", f"/api/v1/models/{model_id}/promote", json={"stage": stage})
+        )
+
+    def deploy_model(self, model_id: str, *, canary_weight: int = 0) -> Model:
+        return Model.model_validate(
+            self._request(
+                "POST",
+                f"/api/v1/models/{model_id}/deploy",
+                json={"canary_weight": canary_weight},
+            )
+        )
+
+    def rollback_model(self, model_id: str) -> Model:
+        return Model.model_validate(
+            self._request("POST", f"/api/v1/models/{model_id}/rollback", json={})
         )
 
     def list_agents(self) -> list[Agent]:
@@ -140,6 +178,18 @@ class MLAIOpsClient:
             )
         )
 
+    def agent_sessions(self, agent_id: str) -> list[AgentSession]:
+        return [
+            AgentSession.model_validate(item)
+            for item in self._page(f"/api/v1/agents/{agent_id}/sessions")
+        ]
+
+    def agent_traces(self, agent_id: str) -> list[AgentTrace]:
+        return [
+            AgentTrace.model_validate(item)
+            for item in self._page(f"/api/v1/agents/{agent_id}/traces")
+        ]
+
     def list_tools(self) -> list[Tool]:
         return [Tool.model_validate(item) for item in self._page("/api/v1/tools")]
 
@@ -177,6 +227,14 @@ class MLAIOpsClient:
             json={"name": name, "type": type, "secret_ref": secret_ref, "endpoint": endpoint},
         )
         return Connection.model_validate(data)
+
+    def test_connection(self, connection_id: str) -> Connection:
+        return Connection.model_validate(
+            self._request("POST", f"/api/v1/connections/{connection_id}/test", json={})
+        )
+
+    def readiness(self) -> Readiness:
+        return Readiness.model_validate(self._request("GET", "/api/v1/onboarding/readiness"))
 
     def audit_events(self) -> list[AuditEvent]:
         return [AuditEvent.model_validate(item) for item in self._page("/api/v1/audit")]
