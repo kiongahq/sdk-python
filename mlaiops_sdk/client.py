@@ -169,6 +169,24 @@ class MLAIOpsClient:
         )
         return Agent.model_validate(data)
 
+    def invoke_agent(
+        self,
+        agent_id: str,
+        message: str,
+        *,
+        session_id: str = "",
+        user_id: str = "",
+        timeout: float = 120.0,
+    ) -> dict:
+        """Run one agent turn through the gateway's runtime proxy."""
+        response = self._client.post(
+            f"/api/v1/agents/{agent_id}/invoke",
+            json={"message": message, "session_id": session_id, "user_id": user_id},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def set_agent_traffic(self, agent_id: str, canary_weight: int) -> Agent:
         return Agent.model_validate(
             self._request(

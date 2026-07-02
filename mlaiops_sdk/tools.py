@@ -59,3 +59,34 @@ def register_tool(
 
 def registered_tools() -> list[ToolDefinition]:
     return list(_registry.values())
+
+
+def get_tool(name: str, version: str | None = None) -> ToolDefinition:
+    """Resolve a registered tool by name; latest registered version wins."""
+    if version is not None:
+        try:
+            return _registry[(name, version)]
+        except KeyError:
+            raise KeyError(f"tool {name}@{version} is not registered") from None
+    matches = [definition for key, definition in _registry.items() if key[0] == name]
+    if not matches:
+        raise KeyError(f"tool {name} is not registered")
+    return max(matches, key=lambda definition: definition.version)
+
+
+def to_langchain_tool(definition: ToolDefinition):
+    """Convert a registered tool into a LangChain ``StructuredTool``."""
+    from langchain_core.tools import StructuredTool
+
+    return StructuredTool.from_function(
+        func=definition.function,
+        name=definition.name,
+        description=definition.description,
+    )
+
+
+def langchain_tools(names: list[str] | None = None) -> list:
+    """LangChain tools for the named registrations (all tools when omitted)."""
+    if names is None:
+        return [to_langchain_tool(definition) for definition in registered_tools()]
+    return [to_langchain_tool(get_tool(name)) for name in names]
