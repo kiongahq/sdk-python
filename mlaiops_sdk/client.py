@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import httpx
 
 from .models import (
@@ -28,6 +30,7 @@ class MLAIOpsClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        token = token or os.getenv("MLAIOPS_TOKEN")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if actor:
             headers["X-MLAIOps-Actor"] = actor
