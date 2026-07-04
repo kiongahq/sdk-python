@@ -1,7 +1,7 @@
 """Agent infrastructure primitives.
 
 Provides the platform-managed LangGraph checkpointer and the multi-tier
-``AgentMemoryClient`` described in the PRD (section 4.6): semantic long-term
+``AgentMemoryClient``: semantic long-term
 memory on pgvector and structured entity features from the online feature
 gateway. Connection strings come from the environment (Kubernetes Secret
 mounts in production), never from agent source code.
