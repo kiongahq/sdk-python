@@ -3,6 +3,14 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class GitRepository(BaseModel):
+    url: str
+    provider: str
+    default_branch: str
+    last_commit: str | None = None
+    synced_at: datetime | None = None
+
+
 class Project(BaseModel):
     id: str
     name: str
@@ -11,6 +19,8 @@ class Project(BaseModel):
     namespace: str
     status: str
     created_at: datetime
+    owner_subject: str | None = None
+    repository: GitRepository | None = None
 
 
 class PipelineRun(BaseModel):
@@ -22,8 +32,39 @@ class PipelineRun(BaseModel):
     created_at: datetime
     updated_at: datetime
     parent_run_id: str | None = None
+    engine_run_id: str | None = None
+    definition_id: str | None = None
+    execution_mode: str | None = None
+    parameters: dict = Field(default_factory=dict)
     steps: list[dict] = Field(default_factory=list)
     logs: list[dict] = Field(default_factory=list)
+
+
+class PipelineDefinition(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    version: str
+    execution_mode: str
+    jobs: list[dict]
+    repository_url: str | None = None
+    commit_sha: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class Function(BaseModel):
+    name: str
+    project_id: str = ""
+    image: str
+    status: str
+    replicas: int = 0
+    env_vars: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
+    cpu: str | None = None
+    memory: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class Model(BaseModel):

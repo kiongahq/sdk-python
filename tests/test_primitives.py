@@ -1,6 +1,6 @@
 import pytest
 
-from mlaiops_sdk.pipelines import Pipeline, PipelineStep
+from mlaiops_sdk.pipelines import FunctionStep, Pipeline, PipelineStep
 from mlaiops_sdk.tools import register_tool, registered_tools
 
 
@@ -17,6 +17,15 @@ def test_pipeline_compiles_dependency_order() -> None:
 def test_pipeline_rejects_unknown_dependency() -> None:
     with pytest.raises(ValueError, match="unknown dependencies"):
         Pipeline("bad").add(PipelineStep("train", "trainer:1", [], depends_on=["missing"]))
+
+
+def test_function_jobs_compile_to_control_plane_definition() -> None:
+    pipeline = Pipeline("event-score").add(FunctionStep("extract", "extract-fn"))
+    pipeline.add(FunctionStep("score", "score-fn", depends_on=["extract"]))
+    definition = pipeline.definition("prj-1", version="3", commit_sha="abc123")
+    assert definition["execution_mode"] == "functions"
+    assert definition["jobs"][1]["kind"] == "function"
+    assert definition["jobs"][1]["depends_on"] == ["extract"]
 
 
 def test_tool_registration_derives_json_schema() -> None:

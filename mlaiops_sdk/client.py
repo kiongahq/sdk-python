@@ -10,8 +10,10 @@ from .models import (
     AgentTrace,
     AuditEvent,
     Connection,
+    Function,
     Model,
     PipelineRun,
+    PipelineDefinition,
     Project,
     Readiness,
     Tool,
@@ -62,13 +64,21 @@ class MLAIOpsClient:
         *,
         description: str = "",
         template: str = "tabular-classification",
+        repository_url: str = "",
+        default_branch: str = "main",
     ) -> Project:
         data = self._request(
             "POST",
             "/api/v1/projects",
-            json={"name": name, "description": description, "template": template},
+            json={"name": name, "description": description, "template": template, "repository_url": repository_url, "default_branch": default_branch},
         )
         return Project.model_validate(data)
+
+    def get_project(self, project_id: str) -> Project:
+        return Project.model_validate(self._request("GET", f"/api/v1/projects/{project_id}"))
+
+    def connect_repository(self, project_id: str, url: str, *, default_branch: str = "main") -> Project:
+        return Project.model_validate(self._request("PUT", f"/api/v1/projects/{project_id}/repository", json={"url": url, "default_branch": default_branch}))
 
     def list_pipeline_runs(self) -> list[PipelineRun]:
         return [
@@ -89,13 +99,36 @@ class MLAIOpsClient:
             self._request("POST", f"/api/v1/pipelines/runs/{run_id}/retry", json={})
         )
 
-    def submit_pipeline(self, project_id: str, name: str = "training-pipeline") -> PipelineRun:
+    def submit_pipeline(self, project_id: str, name: str = "training-pipeline", *, definition_id: str = "", parameters: dict | None = None) -> PipelineRun:
         data = self._request(
             "POST",
             "/api/v1/pipelines/submit",
-            json={"project_id": project_id, "name": name},
+            json={"project_id": project_id, "name": name, "definition_id": definition_id, "parameters": parameters or {}},
         )
         return PipelineRun.model_validate(data)
+
+    def list_pipeline_definitions(self) -> list[PipelineDefinition]:
+        return [PipelineDefinition.model_validate(item) for item in self._page("/api/v1/pipelines/definitions")]
+
+    def create_pipeline_definition(self, project_id: str, name: str, version: str, jobs: list[dict], *, execution_mode: str = "prefect", repository_url: str = "", commit_sha: str = "") -> PipelineDefinition:
+        data = self._request("POST", "/api/v1/pipelines/definitions", json={"project_id": project_id, "name": name, "version": version, "execution_mode": execution_mode, "jobs": jobs, "repository_url": repository_url, "commit_sha": commit_sha})
+        return PipelineDefinition.model_validate(data)
+
+    def list_functions(self) -> list[Function]:
+        return [Function.model_validate(item) for item in self._page("/api/v1/functions")]
+
+    def deploy_function(self, project_id: str, name: str, image: str, *, cpu: str = "500m", memory: str = "512Mi", env_vars: dict[str, str] | None = None, annotations: dict[str, str] | None = None) -> Function:
+        data = self._request("POST", "/api/v1/functions", json={"project_id": project_id, "name": name, "image": image, "cpu": cpu, "memory": memory, "env_vars": env_vars or {}, "annotations": annotations or {}})
+        return Function.model_validate(data)
+
+    def invoke_function(self, name: str, payload: dict) -> dict:
+        return self._request("POST", f"/api/v1/functions/{name}/invoke", json=payload)
+
+    def invoke_function_async(self, name: str, payload: dict) -> dict:
+        return self._request("POST", f"/api/v1/functions/{name}/invoke-async", json=payload)
+
+    def delete_function(self, name: str) -> None:
+        self._request("DELETE", f"/api/v1/functions/{name}")
 
     def list_models(self) -> list[Model]:
         return [Model.model_validate(item) for item in self._page("/api/v1/models")]
@@ -266,4 +299,6 @@ class MLAIOpsClient:
     def _request(self, method: str, path: str, **kwargs: object):
         response = self._client.request(method, path, **kwargs)
         response.raise_for_status()
+        if response.status_code == 204:
+            return None
         return response.json()
