@@ -26,13 +26,15 @@ class MLAIOpsClient:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8080",
+        base_url: str | None = None,
         *,
         token: str | None = None,
         actor: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        if base_url is None:
+            base_url = os.getenv("MLAIOPS_URL") or "http://localhost:8080"
         token = token or os.getenv("MLAIOPS_TOKEN")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if actor:

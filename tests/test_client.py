@@ -113,6 +113,19 @@ def test_client_health_and_projects() -> None:
         assert project.template_version == "1.0.0"
 
 
+def test_client_uses_gateway_url_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("MLAIOPS_URL", "http://gateway:8080/")
+    seen = []
+
+    def route(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"status": "ok"})
+
+    with MLAIOpsClient(transport=httpx.MockTransport(route)) as client:
+        assert client.health()["status"] == "ok"
+    assert seen == ["http://gateway:8080/api/v1/health"]
+
+
 def test_client_project_template_catalog() -> None:
     with MLAIOpsClient(transport=httpx.MockTransport(handler)) as client:
         templates = client.list_project_templates()

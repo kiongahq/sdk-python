@@ -5,13 +5,21 @@ scripts and agents to create projects, submit and watch pipeline runs, register 
 deploy models, and build agents with memory, tools, tracing and a pluggable LLM.
 
 ```python
+from getpass import getpass
 from mlaiops_sdk import MLAIOpsClient
 
-with MLAIOpsClient() as client:          # MLAIOPS_URL, MLAIOPS_TOKEN from the environment
-    project = client.create_project("customer-churn", template="tabular-classification")
+with MLAIOpsClient(token=getpass("Kionga personal API key: ")) as client:
+    project = client.create_project("customer-churn", template="production-ml")
     run = client.submit_pipeline(project.id)
     print(run.id, run.status)
 ```
+
+Create a personal API key in **Console → Settings** before running the example.
+The SDK reads `MLAIOPS_URL` from the environment, which is preconfigured in the
+Kionga notebook; outside the platform it defaults to `http://localhost:8080`.
+For non-interactive scripts, set `MLAIOPS_TOKEN` in your secret manager or process
+environment instead of passing `token=`. The browser login does not automatically
+grant a notebook kernel API credentials.
 
 | Module | What it gives you |
 | --- | --- |
