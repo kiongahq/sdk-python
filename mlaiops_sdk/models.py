@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class GitRepository(BaseModel):
@@ -27,6 +27,12 @@ class Project(BaseModel):
     created_at: datetime
     owner_subject: str | None = None
     repository: GitRepository | None = None
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def empty_capabilities(cls, value: object) -> object:
+        # Older projects and the Go encoder can represent an empty slice as null.
+        return [] if value is None else value
 
 
 class ProjectTemplate(BaseModel):
@@ -57,6 +63,13 @@ class PipelineRun(BaseModel):
     parameters: dict = Field(default_factory=dict)
     steps: list[dict] = Field(default_factory=list)
     logs: list[dict] = Field(default_factory=list)
+
+    @field_validator("parameters", "steps", "logs", mode="before")
+    @classmethod
+    def empty_run_collections(cls, value: object, info) -> object:
+        if value is None:
+            return {} if info.field_name == "parameters" else []
+        return value
 
 
 class PipelineDefinition(BaseModel):

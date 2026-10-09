@@ -3,6 +3,16 @@ import json
 import httpx
 
 from mlaiops_sdk import MLAIOpsClient
+from mlaiops_sdk.models import PipelineRun
+
+
+def test_pipeline_run_accepts_empty_go_collections():
+    run = PipelineRun.model_validate({
+        "id": "run-1", "project_id": "prj-1", "name": "train", "status": "queued",
+        "progress": 0, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+        "parameters": None, "steps": None, "logs": None,
+    })
+    assert run.parameters == {} and run.steps == [] and run.logs == []
 
 
 def handler(request: httpx.Request) -> httpx.Response:
@@ -17,6 +27,7 @@ def handler(request: httpx.Request) -> httpx.Response:
                     "name": "Demo",
                     "description": "Starter",
                     "template": "tabular-classification",
+                    "capabilities": None,
                     "namespace": "demo",
                     "status": "ready",
                     "created_at": "2026-01-01T00:00:00Z",
