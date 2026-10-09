@@ -27,9 +27,29 @@ runtime = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
 ]
+dev = [
+    "mlaiops-sdk[agents,huggingface]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://kiongahq.github.io/docs/"
+Source = "https://github.com/kiongahq/sdk-python"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mlaiops_sdk"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+
 [tool.ruff]
 line-length = 100
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# Explicit, so a newer ruff with wider defaults cannot change the gate.
+select = ["E4", "E7", "E9", "F"]
