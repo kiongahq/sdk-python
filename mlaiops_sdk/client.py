@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import quote
 
 import httpx
 
@@ -332,6 +333,84 @@ class MLAIOpsClient:
 
     def list_connections(self) -> list[Connection]:
         return [Connection.model_validate(item) for item in self._page("/api/v1/connections")]
+
+    def list_knowledge_bases(self) -> list[dict]:
+        """Discover only bases visible to the caller's assigned projects."""
+        return self._page("/api/v1/knowledge-bases")
+
+    def add_knowledge_chunk(
+        self, base_id: str, text: str, vector: list[float], *, metadata: dict | None = None
+    ) -> dict:
+        return self._request(
+            "POST", f"/api/v1/knowledge-bases/{quote(base_id, safe='')}/chunks",
+            json={"text": text, "vector": vector, "metadata": metadata or {}},
+        )
+
+    def search_knowledge_base(
+        self, base_id: str, vector: list[float], *, limit: int = 5
+    ) -> list[dict]:
+        return self._request(
+            "POST", f"/api/v1/knowledge-bases/{quote(base_id, safe='')}/search",
+            json={"vector": vector, "limit": limit},
+        )["items"]
+
+    def list_agent_api_connections(self) -> list[dict]:
+        """Return approved operations without upstream URLs or credentials."""
+        return self._page("/api/v1/agent-api-connections")
+
+    def invoke_agent_api_connection(self, connection_id: str, payload: dict | list) -> dict:
+        return self._request(
+            "POST", f"/api/v1/agent-api-connections/{quote(connection_id, safe='')}/invoke",
+            json=payload,
+        )
+
+    def list_langflow_snapshots(self) -> list[dict]:
+        return self._page("/api/v1/langflow-snapshots")
+
+    def get_langflow_snapshot(self, snapshot_id: str) -> dict:
+        return self._request("GET", f"/api/v1/langflow-snapshots/{quote(snapshot_id, safe='')}")
+
+    def list_langflow_flows(self, workspace_id: str) -> list[dict]:
+        return self._page(f"/api/v1/langflow-workspaces/{quote(workspace_id, safe='')}/flows")
+
+    def capture_langflow_flow(
+        self, workspace_id: str, flow_id: str, project_id: str, *,
+        snapshot_id: str = "", revision: int = 0,
+    ) -> dict:
+        """Capture a saved editor flow, checking the expected revision on updates."""
+        return self._request(
+            "POST", f"/api/v1/langflow-workspaces/{quote(workspace_id, safe='')}/snapshots",
+            json={"flow_id": flow_id, "project_id": project_id,
+                  "snapshot_id": snapshot_id, "revision": revision},
+        )
+
+    def publish_langflow_snapshot(
+        self, snapshot_id: str, *, revision: int = 0, min_replicas: int = 1,
+        max_replicas: int = 1, cpu: str = "500m", memory: str = "1Gi",
+    ) -> dict:
+        """Deploy a retained or current revision independently of its editor."""
+        return self._request(
+            "POST", f"/api/v1/langflow-snapshots/{quote(snapshot_id, safe='')}/publish",
+            json={"revision": revision,
+                  "autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
+                  "resources": {"cpu": cpu, "memory": memory}},
+        )
+
+    def activate_langflow_deployment(self, snapshot_id: str, agent_id: str) -> dict:
+        """Point the stable snapshot route at a ready published revision."""
+        return self._request(
+            "POST", f"/api/v1/langflow-snapshots/{quote(snapshot_id, safe='')}/activate",
+            json={"agent_id": agent_id},
+        )
+
+    def invoke_langflow_snapshot(
+        self, snapshot_id: str, message: str, *, session_id: str = "", user_id: str = ""
+    ) -> dict:
+        """Invoke the active revision through the snapshot's stable route."""
+        return self._request(
+            "POST", f"/api/v1/langflow-snapshots/{quote(snapshot_id, safe='')}/invoke",
+            json={"message": message, "session_id": session_id, "user_id": user_id},
+        )
 
     def create_connection(
         self, name: str, type: str, secret_ref: str, *, endpoint: str = ""
