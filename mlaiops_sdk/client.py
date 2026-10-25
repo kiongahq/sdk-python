@@ -306,6 +306,10 @@ class MLAIOpsClient:
             for item in self._page(f"/api/v1/agents/{agent_id}/traces")
         ]
 
+    def agent_metrics(self, agent_id: str) -> dict:
+        """Read live CPU and memory use when Kubernetes metrics are available."""
+        return self._request("GET", f"/api/v1/agents/{quote(agent_id, safe='')}/metrics")
+
     def list_tools(self) -> list[Tool]:
         return [Tool.model_validate(item) for item in self._page("/api/v1/tools")]
 

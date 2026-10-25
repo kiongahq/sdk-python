@@ -31,6 +31,8 @@ def test_discovery_and_invocation_keep_credentials_on_gateway():
         if path == "/api/v1/registered-storage/st-1/object":
             assert request.url.params["key"] == "reports/a.txt"
             return httpx.Response(200, json={"content": "hello"})
+        if path == "/api/v1/agents/ag-1/metrics":
+            return httpx.Response(200, json={"available": True, "pods": 1, "cpu_millicores": 250, "memory_bytes": 134217728, "gpu_utilization_available": False})
         if path == "/api/v1/knowledge-bases/kb-1/search":
             assert request.content == b'{"vector":[0.1,0.2],"limit":3}'
             return httpx.Response(200, json={"items": [{"text": "matched"}]})
@@ -51,6 +53,7 @@ def test_discovery_and_invocation_keep_credentials_on_gateway():
         assert client.list_registered_storage()[0]["id"] == "st-1"
         assert client.list_registered_objects("st-1", prefix="reports/")["objects"][0]["key"] == "reports/a.txt"
         assert client.preview_registered_object("st-1", "reports/a.txt")["content"] == "hello"
+        assert client.agent_metrics("ag-1")["cpu_millicores"] == 250
         assert client.search_knowledge_base("kb-1", [0.1, 0.2], limit=3)[0]["text"] == "matched"
         assert client.add_knowledge_chunk("kb-1", "document", [0.1, 0.2])["id"] == "chunk-1"
         assert client.list_agent_api_connections()[0]["id"] == "api-1"
