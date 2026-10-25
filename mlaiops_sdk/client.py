@@ -354,6 +354,22 @@ class MLAIOpsClient:
             params={"key": key},
         )
 
+    def list_registered_storage(self) -> list[dict]:
+        """List S3-compatible sources assigned to the caller's projects."""
+        return self._page("/api/v1/registered-storage")
+
+    def list_registered_objects(self, source_id: str, *, prefix: str = "") -> dict:
+        return self._request(
+            "GET", f"/api/v1/registered-storage/{quote(source_id, safe='')}/objects",
+            params={"prefix": prefix},
+        )
+
+    def preview_registered_object(self, source_id: str, key: str) -> dict:
+        return self._request(
+            "GET", f"/api/v1/registered-storage/{quote(source_id, safe='')}/object",
+            params={"key": key},
+        )
+
     def add_knowledge_chunk(
         self, base_id: str, text: str, vector: list[float], *, metadata: dict | None = None
     ) -> dict:
