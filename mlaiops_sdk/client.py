@@ -338,6 +338,22 @@ class MLAIOpsClient:
         """Discover only bases visible to the caller's assigned projects."""
         return self._page("/api/v1/knowledge-bases")
 
+    def list_datasets(self) -> list[dict]:
+        """Discover dataset prefixes visible to the caller's project and bucket grant."""
+        return self._page("/api/v1/datasets")
+
+    def list_dataset_objects(self, dataset_id: str, *, prefix: str = "") -> dict:
+        return self._request(
+            "GET", f"/api/v1/datasets/{quote(dataset_id, safe='')}/objects",
+            params={"prefix": prefix},
+        )
+
+    def preview_dataset_object(self, dataset_id: str, key: str) -> dict:
+        return self._request(
+            "GET", f"/api/v1/datasets/{quote(dataset_id, safe='')}/object",
+            params={"key": key},
+        )
+
     def add_knowledge_chunk(
         self, base_id: str, text: str, vector: list[float], *, metadata: dict | None = None
     ) -> dict:

@@ -15,6 +15,14 @@ def test_discovery_and_invocation_keep_credentials_on_gateway():
         path = request.url.path
         if path == "/api/v1/knowledge-bases":
             return httpx.Response(200, json={"items": [{"id": "kb-1", "project_id": "prj-1", "backend": "qdrant"}]})
+        if path == "/api/v1/datasets":
+            return httpx.Response(200, json={"items": [{"id": "ds-1", "project_id": "prj-1", "prefix": "training/"}]})
+        if path == "/api/v1/datasets/ds-1/objects":
+            assert request.url.params["prefix"] == "churn/"
+            return httpx.Response(200, json={"objects": [{"key": "training/churn/part.csv"}]})
+        if path == "/api/v1/datasets/ds-1/object":
+            assert request.url.params["key"] == "training/churn/part.csv"
+            return httpx.Response(200, json={"content": "rows"})
         if path == "/api/v1/knowledge-bases/kb-1/search":
             assert request.content == b'{"vector":[0.1,0.2],"limit":3}'
             return httpx.Response(200, json={"items": [{"text": "matched"}]})
@@ -29,6 +37,9 @@ def test_discovery_and_invocation_keep_credentials_on_gateway():
 
     with MLAIOpsClient(token="user-token", transport=httpx.MockTransport(route)) as client:
         assert client.list_knowledge_bases()[0]["id"] == "kb-1"
+        assert client.list_datasets()[0]["id"] == "ds-1"
+        assert client.list_dataset_objects("ds-1", prefix="churn/")["objects"][0]["key"] == "training/churn/part.csv"
+        assert client.preview_dataset_object("ds-1", "training/churn/part.csv")["content"] == "rows"
         assert client.search_knowledge_base("kb-1", [0.1, 0.2], limit=3)[0]["text"] == "matched"
         assert client.add_knowledge_chunk("kb-1", "document", [0.1, 0.2])["id"] == "chunk-1"
         assert client.list_agent_api_connections()[0]["id"] == "api-1"
