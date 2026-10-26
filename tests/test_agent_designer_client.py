@@ -91,3 +91,37 @@ def test_event_pages_pass_the_cursor():
     with client_for(route) as client:
         page = client.agent_run_events("agd-1", "agr-1", after=4)
     assert page["next"] == 5
+
+
+def test_approvals_reviews_versions_and_operations():
+    seen = []
+
+    def route(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, dict(request.url.params), json.loads(request.content) if request.content else None))
+        path = request.url.path
+        if path == "/api/v1/agent-approvals":
+            return httpx.Response(200, json={"items": [{"id": "apr-1", "status": "pending"}]})
+        if path.endswith("/decision"):
+            return httpx.Response(200, json={"id": "apr-1", "status": "approved"})
+        if path.endswith("/review"):
+            return httpx.Response(200, json={"id": "age-1"})
+        if path == "/api/v1/agent-versions":
+            return httpx.Response(200, json={"items": [{"id": "agv-1"}]})
+        if path.endswith("/operations"):
+            return httpx.Response(200, json={"totals": {"requests": 3}})
+        return httpx.Response(404)
+
+    with client_for(route) as client:
+        assert client.list_agent_approvals(run_id="agr-1")[0]["id"] == "apr-1"
+        assert client.decide_agent_approval("apr-1", "approve", comment="ok")["status"] == "approved"
+        with pytest.raises(ValueError):
+            client.decide_agent_approval("apr-1", "maybe")
+        client.review_agent_evaluation_case("age-1", "case one", "needs_changes", note="tone")
+        assert client.list_project_agent_versions("prj-1") == [{"id": "agv-1"}]
+        assert client.agent_operations("agt-1", hours=6)["totals"]["requests"] == 3
+        with pytest.raises(ValueError):
+            client.agent_operations("agt-1", hours=0)
+    assert seen[0][2] == {"status": "pending", "run_id": "agr-1"}
+    assert seen[1][3] == {"decision": "approve", "comment": "ok"}
+    assert seen[2][1] == "/api/v1/agent-evaluations/age-1/cases/case%20one/review" or seen[2][1].endswith("/cases/case one/review")
+    assert seen[4][2] == {"hours": "6"}

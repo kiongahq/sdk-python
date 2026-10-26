@@ -587,6 +587,35 @@ class MLAIOpsClient:
                   "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation},
         )
 
+    def list_agent_approvals(self, *, status: str = "pending", project_id: str = "", run_id: str = "") -> list[dict]:
+        """Approval requests from approval nodes, newest first."""
+        params = {key: value for key, value in {"status": status, "project_id": project_id, "run_id": run_id}.items() if value}
+        return self._request("GET", "/api/v1/agent-approvals", params=params)["items"]
+
+    def decide_agent_approval(self, approval_id: str, decision: str, *, comment: str = "") -> dict:
+        """Approve or reject a pending request (``decision``: approve | reject)."""
+        if decision not in ("approve", "reject"):
+            raise ValueError("decision must be 'approve' or 'reject'")
+        return self._request("POST", f"/api/v1/agent-approvals/{quote(approval_id, safe='')}/decision",
+                             json={"decision": decision, "comment": comment})
+
+    def review_agent_evaluation_case(self, evaluation_id: str, case_id: str, status: str, *, note: str = "") -> dict:
+        """Record a person's review (accepted | rejected | needs_changes) of one evaluated case."""
+        return self._request(
+            "POST", f"/api/v1/agent-evaluations/{quote(evaluation_id, safe='')}/cases/{quote(case_id, safe='')}/review",
+            json={"status": status, "note": note},
+        )
+
+    def list_project_agent_versions(self, project_id: str = "") -> list[dict]:
+        """Published versions usable by subflow, map and loop nodes."""
+        return self._request("GET", "/api/v1/agent-versions", params={"project_id": project_id} if project_id else None)["items"]
+
+    def agent_operations(self, agent_id: str, *, hours: int = 24) -> dict:
+        """KPIs, 24-bucket series, percentiles, rollout timeline and sibling deployments for one agent."""
+        if not 1 <= hours <= 168:
+            raise ValueError("hours must be 1-168")
+        return self._request("GET", f"/api/v1/agents/{quote(agent_id, safe='')}/operations", params={"hours": hours})
+
     def create_connection(
         self, name: str, type: str, secret_ref: str, *, endpoint: str = ""
     ) -> Connection:
