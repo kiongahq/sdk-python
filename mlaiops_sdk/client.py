@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from urllib.parse import quote
 
 import httpx
@@ -446,6 +447,144 @@ class MLAIOpsClient:
         return self._request(
             "POST", f"/api/v1/langflow-snapshots/{quote(snapshot_id, safe='')}/invoke",
             json={"message": message, "session_id": session_id, "user_id": user_id},
+        )
+
+    # --- native Agent Designer (contracts agent-graph) ---
+
+    def agent_designer_components(self) -> dict:
+        """The component registry: node kinds, typed ports, settings, side effects."""
+        return self._request("GET", "/api/v1/agent-designs/components")
+
+    def agent_designer_templates(self) -> list[dict]:
+        return self._page("/api/v1/agent-designs/templates")
+
+    def list_agent_designs(self) -> list[dict]:
+        return self._page("/api/v1/agent-designs")
+
+    def get_agent_design(self, design_id: str) -> dict:
+        return self._request("GET", f"/api/v1/agent-designs/{quote(design_id, safe='')}")
+
+    def create_agent_design(self, project_id: str, name: str, graph: dict, *, description: str = "") -> dict:
+        """Create a design from a graph ({nodes, edges, settings?}), e.g. a template's graph."""
+        return self._request("POST", "/api/v1/agent-designs", json=self._design_body(project_id, name, graph, description, 0))
+
+    def save_agent_design(self, design: dict, graph: dict | None = None) -> dict:
+        """Save a new revision; ``design['revision']`` must be the revision you read (409 otherwise)."""
+        graph = graph or design
+        return self._request(
+            "PUT", f"/api/v1/agent-designs/{quote(design['id'], safe='')}",
+            json=self._design_body(design["project_id"], design["name"], graph, design.get("description", ""), design["revision"]),
+        )
+
+    @staticmethod
+    def _design_body(project_id: str, name: str, graph: dict, description: str, revision: int) -> dict:
+        body = {"project_id": project_id, "name": name, "description": description, "revision": revision,
+                "nodes": graph["nodes"], "edges": graph["edges"]}
+        if graph.get("settings"):
+            body["settings"] = graph["settings"]
+        return body
+
+    def validate_agent_design(self, design_id: str) -> dict:
+        """Returns {runnable, issues, content_sha256, graph} for the saved revision."""
+        return self._request("POST", f"/api/v1/agent-designs/{quote(design_id, safe='')}/validate", json={})
+
+    def run_agent_design(
+        self, design_id: str, input: str, *, session_id: str = "", history: list[dict] | None = None,
+        allow_side_effects: bool = False, stop_after: str = "", idempotency_key: str = "",
+        wait: bool = True, timeout: float = 360.0, poll_interval: float = 0.5,
+    ) -> dict:
+        """Run the saved revision in the isolated runner. With ``wait`` the
+        finished run (status, output, usage, events) is returned."""
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
+        run = self._request(
+            "POST", f"/api/v1/agent-designs/{quote(design_id, safe='')}/runs", headers=headers,
+            json={"input": input, "session_id": session_id, "history": history or [],
+                  "allow_side_effects": allow_side_effects, "stop_after": stop_after},
+        )
+        return self.wait_for_agent_run(design_id, run["id"], timeout=timeout, poll_interval=poll_interval) if wait else run
+
+    def get_agent_run(self, design_id: str, run_id: str) -> dict:
+        return self._request("GET", f"/api/v1/agent-designs/{quote(design_id, safe='')}/runs/{quote(run_id, safe='')}")
+
+    def agent_run_events(self, design_id: str, run_id: str, *, after: int = -1) -> dict:
+        """One polling page: {status, events, next, done}. Pass ``next`` as ``after``."""
+        return self._request(
+            "GET", f"/api/v1/agent-designs/{quote(design_id, safe='')}/runs/{quote(run_id, safe='')}/events",
+            params={"after": after},
+        )
+
+    def cancel_agent_run(self, design_id: str, run_id: str) -> dict:
+        return self._request("POST", f"/api/v1/agent-designs/{quote(design_id, safe='')}/runs/{quote(run_id, safe='')}/cancel", json={})
+
+    def wait_for_agent_run(self, design_id: str, run_id: str, *, timeout: float = 360.0, poll_interval: float = 0.5) -> dict:
+        deadline = time.monotonic() + timeout
+        while True:
+            run = self.get_agent_run(design_id, run_id)
+            if run["status"] in ("succeeded", "failed", "cancelled"):
+                return run
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"agent run {run_id} is still {run['status']}")
+            time.sleep(poll_interval)
+
+    def get_agent_test_cases(self, design_id: str) -> dict:
+        return self._request("GET", f"/api/v1/agent-designs/{quote(design_id, safe='')}/fixtures")
+
+    def save_agent_test_cases(self, design_id: str, cases: list[dict], *, revision: int) -> dict:
+        """Replace the design's regression cases; ``revision`` is the fixtures revision you read."""
+        return self._request("PUT", f"/api/v1/agent-designs/{quote(design_id, safe='')}/fixtures",
+                             json={"revision": revision, "cases": cases})
+
+    def evaluate_agent_design(
+        self, design_id: str, *, gate: float = 0.8, version_id: str = "", cases: list[dict] | None = None,
+        allow_side_effects: bool = False, wait: bool = True, timeout: float = 1800.0, poll_interval: float = 1.0,
+    ) -> dict:
+        """Evaluate the saved revision (or a published version) against test cases and a pass-rate gate."""
+        evaluation = self._request(
+            "POST", f"/api/v1/agent-designs/{quote(design_id, safe='')}/evaluations",
+            json={"gate": gate, "version_id": version_id, "cases": cases or [], "allow_side_effects": allow_side_effects},
+        )
+        if not wait:
+            return evaluation
+        deadline = time.monotonic() + timeout
+        while evaluation["status"] in ("running", "cancelling"):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"evaluation {evaluation['id']} is still {evaluation['status']}")
+            time.sleep(poll_interval)
+            evaluation = self.get_agent_evaluation(evaluation["id"])
+        return evaluation
+
+    def get_agent_evaluation(self, evaluation_id: str) -> dict:
+        return self._request("GET", f"/api/v1/agent-evaluations/{quote(evaluation_id, safe='')}")
+
+    def list_agent_evaluations(self, design_id: str) -> list[dict]:
+        return self._page(f"/api/v1/agent-designs/{quote(design_id, safe='')}/evaluations")
+
+    def publish_agent_design(self, design_id: str, revision: int, *, notes: str = "", evaluation_id: str = "") -> dict:
+        """Publish the saved revision as an immutable version. Unchanged behavior returns the existing version."""
+        return self._request("POST", f"/api/v1/agent-designs/{quote(design_id, safe='')}/publish",
+                             json={"revision": revision, "notes": notes, "evaluation_id": evaluation_id})
+
+    def list_agent_versions(self, design_id: str) -> list[dict]:
+        return self._page(f"/api/v1/agent-designs/{quote(design_id, safe='')}/versions")
+
+    def get_agent_version(self, version_id: str) -> dict:
+        return self._request("GET", f"/api/v1/agent-versions/{quote(version_id, safe='')}")
+
+    def run_agent_version(self, version_id: str, input: str, *, design_id: str, session_id: str = "",
+                          allow_side_effects: bool = False, wait: bool = True, timeout: float = 360.0) -> dict:
+        run = self._request("POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/runs",
+                            json={"input": input, "session_id": session_id, "allow_side_effects": allow_side_effects})
+        return self.wait_for_agent_run(design_id, run["id"], timeout=timeout) if wait else run
+
+    def deploy_agent_version(
+        self, version_id: str, *, min_replicas: int = 1, max_replicas: int = 1, cpu: str = "500m",
+        memory: str = "1Gi", require_evaluation: bool = False,
+    ) -> dict:
+        """Deploy (or roll back to) a published version on the managed agent runtime."""
+        return self._request(
+            "POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/deploy",
+            json={"autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
+                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation},
         )
 
     def create_connection(
