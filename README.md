@@ -18,8 +18,7 @@ built on it.
 
 ## Install
 
-The package is not on PyPI. Install a tagged release from GitHub (Python 3.11 or
-later):
+The SDK requires Python 3.11 or later. Install a tagged release from GitHub:
 
 ```bash
 pip install "mlaiops-sdk @ https://github.com/kiongahq/sdk-python/archive/refs/tags/v0.2.0.tar.gz"
@@ -30,6 +29,11 @@ pip install "mlaiops-sdk[agents] @ https://github.com/kiongahq/sdk-python/archiv
 
 Other extras: `runtime` (agents plus FastAPI and uvicorn), `huggingface`, `agno` and
 `nooa`.
+
+After the first PyPI release completes, `python -m pip install mlaiops-sdk` installs
+the published distribution. Pin the selected version in your dependency file.
+Until publisher setup is complete, use the GitHub release above. See
+[CONTRIBUTING.md](CONTRIBUTING.md#build-and-release) for trusted-publisher setup.
 
 ## Usage
 
