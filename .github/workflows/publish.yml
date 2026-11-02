@@ -24,6 +24,8 @@ jobs:
     needs: validate
     uses: ./.github/workflows/ci.yml
   pypi:
+    # Opt in only after the tracked account and publisher setup is complete.
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
     needs: verify
     runs-on: ubuntu-latest
     environment:
@@ -41,7 +43,7 @@ jobs:
         with:
           attestations: true
   release-assets:
-    needs: [verify, pypi]
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -30,9 +30,11 @@ pip install "mlaiops-sdk[agents] @ https://github.com/kiongahq/sdk-python/archiv
 Other extras: `runtime` (agents plus FastAPI and uvicorn), `huggingface`, `agno` and
 `nooa`.
 
-After the first PyPI release completes, `python -m pip install mlaiops-sdk` installs
-the published distribution. Pin the selected version in your dependency file.
-Until publisher setup is complete, use the GitHub release above. See
+PyPI publication is [on hold](https://github.com/kiongahq/sdk-python/issues/29)
+until a Kionga email is available. Use the GitHub releases above; reviewed SDK
+releases attach the verified wheel, source distribution and checksums.
+After PyPI publication is enabled, `python -m pip install mlaiops-sdk` installs
+the published distribution. Pin the selected version in your dependency file. See
 [CONTRIBUTING.md](CONTRIBUTING.md#build-and-release) for trusted-publisher setup.
 
 ## Usage

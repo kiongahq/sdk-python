@@ -65,13 +65,20 @@ pip install build && python -m build      # wheel and sdist in dist/
 CI builds the package on every push and pull request and uploads `dist/` as a
 workflow artifact. Release Please prepares a reviewed PR updating the package
 version, manifest and changelog. After merge, its published release triggers
-package tests and a single build. The same wheel and source distribution go to
-PyPI through trusted publishing and to GitHub Releases with checksums.
+package tests and a single build. The wheel and source distribution go to
+GitHub Releases with checksums independently of PyPI publication.
 
-Before enabling publication, configure the `mlaiops-sdk` PyPI trusted publisher
+PyPI publication is on hold until a Kionga email is available, tracked in
+[issue #29](https://github.com/kiongahq/sdk-python/issues/29). The repository
+variable `PYPI_PUBLISH_ENABLED` is `false`; an absent variable also disables it.
+GitHub release assets remain enabled while PyPI is on hold.
+
+Before enabling PyPI publication, configure the `mlaiops-sdk` trusted publisher
 for owner `kiongahq`, repository `sdk-python`, workflow `publish.yml`, and
 environment `pypi`. The environment accepts release tags only. Do not store a
-PyPI password or API token in Actions.
+PyPI password or API token in Actions. After account setup and validation,
+set `PYPI_PUBLISH_ENABLED` to `true` to publish the same verified distributions
+to PyPI on subsequent releases.
 
 After a release, bump the pinned SDK version where other repositories install it:
 `SDK_VERSION` and `requirements-dev.txt` in
