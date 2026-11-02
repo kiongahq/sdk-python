@@ -63,9 +63,15 @@ pip install build && python -m build      # wheel and sdist in dist/
 ```
 
 CI builds the package on every push and pull request and uploads `dist/` as a
-workflow artifact. To release, set `version` in `pyproject.toml`, merge, then push a
-matching tag (`vX.Y.Z`). CI creates the GitHub release and attaches the wheel and
-sdist.
+workflow artifact. Release Please prepares a reviewed PR updating the package
+version, manifest and changelog. After merge, its published release triggers
+package tests and a single build. The same wheel and source distribution go to
+PyPI through trusted publishing and to GitHub Releases with checksums.
+
+Before enabling publication, configure the `mlaiops-sdk` PyPI trusted publisher
+for owner `kiongahq`, repository `sdk-python`, workflow `publish.yml`, and
+environment `pypi`. The environment accepts release tags only. Do not store a
+PyPI password or API token in Actions.
 
 After a release, bump the pinned SDK version where other repositories install it:
 `SDK_VERSION` and `requirements-dev.txt` in
@@ -110,3 +116,19 @@ exact finding, so any new secret still fails the scan.
 
 By contributing, you agree that your contributions are licensed under the
 [MIT License](LICENCE).
+
+## Release automation
+
+Configure `RELEASE_PLEASE_TOKEN` with Contents, Issues and Pull requests write
+permissions scoped to the participating repositories. Release PRs require
+maintainer review and all required checks; no bypass is granted to automation.
+The sole maintainer can merge after reviewing the diff and passing checks,
+without a separate approval. Restore independent code-owner approval when
+another trusted maintainer joins.
+The workflow reports an error until this credential is configured.
+
+Use reviewed `vX.Y.Z` releases, keep published tags and packages immutable, and
+pin container digests in deployments. Development builds use `edge` and SHA
+references; existing `latest` aliases stop updating. The
+[release handbook](https://kiongahq.github.io/docs/engineering/contributing/releases/)
+covers publication, dependency updates and rollback.
