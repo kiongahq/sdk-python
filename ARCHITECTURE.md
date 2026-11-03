@@ -31,6 +31,14 @@ token from the argument or `MLAIOPS_TOKEN`. Each public method maps to one gatew
 route. `_request` raises `httpx.HTTPStatusError` for non-2xx responses and returns
 `None` for `204`; `_page` unwraps the `items` array of list endpoints.
 
+### `mlaiops_sdk/transport.py`
+
+The rule for where a bearer token may travel over plaintext HTTP: loopback and
+container or cluster service names only, unless `allow_insecure_http` or
+`MLAIOPS_ALLOW_INSECURE_HTTP=1` opts in. `MLAIOpsClient` raises
+`InsecureTransportError` at construction; `record_trace` skips the trace instead,
+because tracing must never break the caller.
+
 ### `mlaiops_sdk/models.py`
 
 Pydantic models for gateway responses: `Project`, `ProjectTemplate`,

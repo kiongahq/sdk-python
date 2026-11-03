@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 
+from .transport import logger, token_transport_ok
+
 
 def langfuse_handler(**kwargs: Any) -> Any | None:
     """Return a Langfuse LangChain callback handler, or None when unconfigured.
@@ -174,6 +176,14 @@ def record_trace(payload: dict[str, Any]) -> None:
         return
     headers = {}
     if token := os.environ.get("MLAIOPS_TOKEN"):
+        if not token_transport_ok(gateway):
+            # Never put the token on the wire in cleartext, and never break
+            # the caller: skip this trace instead.
+            logger.warning(
+                "trace not sent: MLAIOPS_URL is plaintext HTTP to a non-local host; "
+                "use https:// or set MLAIOPS_ALLOW_INSECURE_HTTP=1"
+            )
+            return
         headers["Authorization"] = f"Bearer {token}"
     try:
         httpx.post(

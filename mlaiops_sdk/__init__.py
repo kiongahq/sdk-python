@@ -1,6 +1,7 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
 from .client import MLAIOpsClient
+from .transport import InsecureTransportError
 from .models import (
     Agent,
     AgentAutoscaling,
@@ -31,6 +32,7 @@ __all__ = [
     "Connection",
     "Function",
     "GitRepository",
+    "InsecureTransportError",
     "LangfuseContext",
     "MLAIOpsClient",
     "Model",
