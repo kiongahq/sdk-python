@@ -79,6 +79,11 @@ configured, and a compact summary always goes to the gateway
 `AgentMemoryClient`, which stores long-term semantic memory in the pgvector table
 `agent_memories` and reads structured entity features from the online feature
 gateway. `HashingEmbedder` is a deterministic embedding for tests and offline use.
+Semantic memory is scoped by tenant, agent and user: `remember` and `recall` fail
+closed without a `user_id`, `recall(scope="session")` narrows to one session,
+`scope="agent"` is an explicit opt-in, and `forget` serves deletion requests.
+`_ensure_schema` adds the scope columns to older tables without touching their
+rows; rows from before scoping have no owner, so only `scope="agent"` reads them.
 
 ### `mlaiops_sdk/agent_adapters.py`
 

@@ -67,6 +67,24 @@ Use an `https://` URL everywhere else. To send the key over plain HTTP on a netw
 you trust, pass `allow_insecure_http=True` or set `MLAIOPS_ALLOW_INSECURE_HTTP=1`;
 the SDK logs a warning each time.
 
+Agent memory is isolated per user. Pass the authenticated user, never a value from
+model output or a request body:
+
+```python
+from mlaiops_sdk.agents import AgentMemoryClient
+
+with AgentMemoryClient("support", session_id, user_id=user.id) as memory:
+    memory.remember("Prefers email")
+    memory.recall("contact preference")                   # this user's memories
+    memory.recall("contact preference", scope="session")  # this session only
+    memory.forget()                                       # delete this user's memories
+```
+
+`remember` and `recall` raise `MissingConfiguration` without a `user_id`.
+`scope="agent"` reads or writes agent-wide memory and is an explicit opt-in. Rows
+stored before this scoping have no owner: they stay in the table, and only
+`scope="agent"` can read them.
+
 ## Documentation
 
 - Product documentation: [Python SDK reference](https://kiongahq.github.io/docs/reference/python-sdk/)
