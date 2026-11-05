@@ -21,6 +21,9 @@ from .models import (
     Readiness,
     Tool,
 )
+from .transport import InsecureTransportError, require_token_transport
+
+__all__ = ["InsecureTransportError", "MLAIOpsClient"]
 
 
 class MLAIOpsClient:
@@ -34,10 +37,15 @@ class MLAIOpsClient:
         actor: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        allow_insecure_http: bool | None = None,
     ) -> None:
         if base_url is None:
             base_url = os.getenv("MLAIOPS_URL") or "http://localhost:8080"
         token = token or os.getenv("MLAIOPS_TOKEN")
+        if token:
+            # Plaintext HTTP only to loopback or an in-cluster service name;
+            # otherwise opt in with allow_insecure_http / MLAIOPS_ALLOW_INSECURE_HTTP.
+            require_token_transport(base_url, allow_insecure_http=allow_insecure_http)
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if actor:
             headers["X-MLAIOps-Actor"] = actor

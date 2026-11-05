@@ -54,6 +54,37 @@ notebook or browser IDE, `MLAIOPS_URL` already points to the workspace's
 authenticated helper, so you need no key. Outside Kionga, create a key in
 **Settings > API keys** and keep it in a secret manager or your environment.
 
+The client refuses to send a key over plain `http://` to another machine, because
+anyone on the network path could read it. `MLAIOpsClient(...)` raises
+`InsecureTransportError`, and `record_trace` skips the trace and logs a warning.
+Plain HTTP stays allowed for:
+
+- loopback: `localhost`, `127.0.0.0/8` and `::1`;
+- container and cluster service names: a single-label host such as `gateway`, or a
+  Kubernetes name ending in `.svc` or `.svc.cluster.local`.
+
+Use an `https://` URL everywhere else. To send the key over plain HTTP on a network
+you trust, pass `allow_insecure_http=True` or set `MLAIOPS_ALLOW_INSECURE_HTTP=1`;
+the SDK logs a warning each time.
+
+Agent memory is isolated per user. Pass the authenticated user, never a value from
+model output or a request body:
+
+```python
+from mlaiops_sdk.agents import AgentMemoryClient
+
+with AgentMemoryClient("support", session_id, user_id=user.id) as memory:
+    memory.remember("Prefers email")
+    memory.recall("contact preference")                   # this user's memories
+    memory.recall("contact preference", scope="session")  # this session only
+    memory.forget()                                       # delete this user's memories
+```
+
+`remember` and `recall` raise `MissingConfiguration` without a `user_id`.
+`scope="agent"` reads or writes agent-wide memory and is an explicit opt-in. Rows
+stored before this scoping have no owner: they stay in the table, and only
+`scope="agent"` can read them.
+
 ## Documentation
 
 - Product documentation: [Python SDK reference](https://kiongahq.github.io/docs/reference/python-sdk/)

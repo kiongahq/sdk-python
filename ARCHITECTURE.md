@@ -31,6 +31,14 @@ token from the argument or `MLAIOPS_TOKEN`. Each public method maps to one gatew
 route. `_request` raises `httpx.HTTPStatusError` for non-2xx responses and returns
 `None` for `204`; `_page` unwraps the `items` array of list endpoints.
 
+### `mlaiops_sdk/transport.py`
+
+The rule for where a bearer token may travel over plaintext HTTP: loopback and
+container or cluster service names only, unless `allow_insecure_http` or
+`MLAIOPS_ALLOW_INSECURE_HTTP=1` opts in. `MLAIOpsClient` raises
+`InsecureTransportError` at construction; `record_trace` skips the trace instead,
+because tracing must never break the caller.
+
 ### `mlaiops_sdk/models.py`
 
 Pydantic models for gateway responses: `Project`, `ProjectTemplate`,
@@ -71,6 +79,11 @@ configured, and a compact summary always goes to the gateway
 `AgentMemoryClient`, which stores long-term semantic memory in the pgvector table
 `agent_memories` and reads structured entity features from the online feature
 gateway. `HashingEmbedder` is a deterministic embedding for tests and offline use.
+Semantic memory is scoped by tenant, agent and user: `remember` and `recall` fail
+closed without a `user_id`, `recall(scope="session")` narrows to one session,
+`scope="agent"` is an explicit opt-in, and `forget` serves deletion requests.
+`_ensure_schema` adds the scope columns to older tables without touching their
+rows; rows from before scoping have no owner, so only `scope="agent"` reads them.
 
 ### `mlaiops_sdk/agent_adapters.py`
 

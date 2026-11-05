@@ -84,6 +84,33 @@ class HashingEmbedder:
         return [value / norm for value in vector]
 
 
+# One complete query per recall scope. Every scope is bound to one agent and tenant.
+_RECALL_SQL = {
+    "session": (
+        "SELECT text, metadata, 1 - (embedding <=> %s::vector) AS score FROM agent_memories"
+        " WHERE tenant_id = %s AND agent_name = %s AND user_id = %s AND session_id = %s"
+        " ORDER BY embedding <=> %s::vector LIMIT %s"
+    ),
+    "user": (
+        "SELECT text, metadata, 1 - (embedding <=> %s::vector) AS score FROM agent_memories"
+        " WHERE tenant_id = %s AND agent_name = %s AND user_id = %s"
+        " ORDER BY embedding <=> %s::vector LIMIT %s"
+    ),
+    "agent": (
+        "SELECT text, metadata, 1 - (embedding <=> %s::vector) AS score FROM agent_memories"
+        " WHERE tenant_id = %s AND agent_name = %s"
+        " ORDER BY embedding <=> %s::vector LIMIT %s"
+    ),
+}
+_FORGET_USER_SQL = (
+    "DELETE FROM agent_memories WHERE tenant_id = %s AND agent_name = %s AND user_id = %s"
+)
+_FORGET_SESSION_SQL = (
+    "DELETE FROM agent_memories"
+    " WHERE tenant_id = %s AND agent_name = %s AND user_id = %s AND session_id = %s"
+)
+
+
 class AgentMemoryClient:
     """Unified access to the agent memory tiers.
 
@@ -92,6 +119,12 @@ class AgentMemoryClient:
 
     Short-term session state belongs to the LangGraph checkpointer and
     in-context state to the graph itself; this client covers the other tiers.
+
+    Semantic memory is isolated per user. ``remember`` and ``recall`` need the
+    authenticated ``user_id`` and raise ``MissingConfiguration`` without it, so
+    one user's facts can never reach another. ``recall(scope="session")`` narrows
+    to this session; ``scope="agent"`` reads across this agent's users and is an
+    explicit opt-in. Never take ``user_id`` from model output or a request body.
     """
 
     def __init__(
@@ -99,12 +132,16 @@ class AgentMemoryClient:
         agent_name: str,
         session_id: str = "",
         *,
+        user_id: str | None = None,
+        tenant_id: str = "",
         dsn: str | None = None,
         feature_gateway_url: str | None = None,
         embedder: Any | None = None,
     ) -> None:
         self.agent_name = agent_name
         self.session_id = session_id
+        self.user_id = user_id
+        self.tenant_id = tenant_id
         self._dsn = dsn
         self._feature_gateway_url = feature_gateway_url or os.environ.get(_ENV_FEATURE_GATEWAY)
         self.embedder = embedder or HashingEmbedder()
@@ -134,6 +171,8 @@ class AgentMemoryClient:
                 CREATE TABLE IF NOT EXISTS agent_memories (
                     id BIGSERIAL PRIMARY KEY,
                     agent_name TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT '',
                     session_id TEXT NOT NULL DEFAULT '',
                     text TEXT NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{{}}',
@@ -142,46 +181,130 @@ class AgentMemoryClient:
                 )
                 """
             )
+            # Tables from before user scoping keep their rows: those rows get an
+            # empty user_id, so only scope="agent" can read them. Check first,
+            # because ALTER TABLE takes an exclusive lock even when it does nothing.
+            cursor.execute(
+                "SELECT attname FROM pg_attribute WHERE attrelid = 'agent_memories'::regclass"
+                " AND attname IN ('tenant_id', 'user_id') AND NOT attisdropped"
+            )
+            present = {row[0] for row in cursor.fetchall()}
+            if "tenant_id" not in present:
+                cursor.execute(
+                    "ALTER TABLE agent_memories"
+                    " ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "user_id" not in present:
+                cursor.execute(
+                    "ALTER TABLE agent_memories"
+                    " ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+                )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS agent_memories_agent_idx "
                 "ON agent_memories (agent_name)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS agent_memories_scope_idx "
+                "ON agent_memories (tenant_id, agent_name, user_id, session_id)"
             )
 
     @staticmethod
     def _vector_literal(embedding: list[float]) -> str:
         return "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
 
-    def remember(self, text: str, *, metadata: dict[str, Any] | None = None) -> None:
-        """Persist a fact in long-term semantic memory."""
+    def _require_user(self, action: str) -> str:
+        if not (self.user_id or "").strip():
+            raise MissingConfiguration(
+                f"{action} needs the authenticated user: pass "
+                'AgentMemoryClient(..., user_id=...), or scope="agent" for agent-wide memory'
+            )
+        return self.user_id
+
+    def _require_session(self, action: str) -> str:
+        if not self.session_id.strip():
+            raise MissingConfiguration(
+                f'{action} with scope="session" needs AgentMemoryClient(..., session_id=...)'
+            )
+        return self.session_id
+
+    def _scope_parameters(self, scope: str, action: str) -> tuple[str, ...]:
+        """The filter values for ``_RECALL_SQL[scope]``, failing closed on a missing identity."""
+        if scope not in _RECALL_SQL:
+            raise ValueError(f"unknown memory scope {scope!r}; use session, user or agent")
+        if scope == "agent":
+            return (self.tenant_id, self.agent_name)
+        user_id = self._require_user(action)
+        if scope == "user":
+            return (self.tenant_id, self.agent_name, user_id)
+        return (self.tenant_id, self.agent_name, user_id, self._require_session(action))
+
+    def remember(
+        self, text: str, *, metadata: dict[str, Any] | None = None, scope: str = "user"
+    ) -> None:
+        """Persist a fact in long-term semantic memory.
+
+        The fact belongs to this user and session. ``scope="agent"`` stores a
+        fact with no owner, which only ``recall(scope="agent")`` can read.
+        """
+        self._scope_parameters(scope, "remember")
+        user_id = "" if scope == "agent" else self.user_id
+        session_id = "" if scope == "agent" else self.session_id
         embedding = self._vector_literal(self.embedder.embed(text))
         with self._connect().cursor() as cursor:
             cursor.execute(
-                "INSERT INTO agent_memories (agent_name, session_id, text, metadata, embedding)"
-                " VALUES (%s, %s, %s, %s, %s::vector)",
+                "INSERT INTO agent_memories"
+                " (agent_name, tenant_id, user_id, session_id, text, metadata, embedding)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s::vector)",
                 (
                     self.agent_name,
-                    self.session_id,
+                    self.tenant_id,
+                    user_id,
+                    session_id,
                     text,
                     json.dumps(metadata or {}),
                     embedding,
                 ),
             )
 
-    def recall(self, query: str, *, top_k: int = 3) -> list[dict[str, Any]]:
-        """Return the ``top_k`` most similar memories for this agent."""
+    def recall(self, query: str, *, top_k: int = 3, scope: str = "user") -> list[dict[str, Any]]:
+        """Return the ``top_k`` most similar memories visible in ``scope``.
+
+        ``user`` (default) reads this user's memories, ``session`` narrows to this
+        session, and ``agent`` reads every memory of this agent and tenant.
+        """
+        parameters = self._scope_parameters(scope, "recall")
         embedding = self._vector_literal(self.embedder.embed(query))
         with self._connect().cursor() as cursor:
             cursor.execute(
-                "SELECT text, metadata, 1 - (embedding <=> %s::vector) AS score"
-                " FROM agent_memories WHERE agent_name = %s"
-                " ORDER BY embedding <=> %s::vector LIMIT %s",
-                (embedding, self.agent_name, embedding, top_k),
+                _RECALL_SQL[scope],
+                (embedding, *parameters, embedding, top_k),
             )
             rows = cursor.fetchall()
         return [
             {"text": text, "metadata": metadata, "score": float(score)}
             for text, metadata, score in rows
         ]
+
+    def forget(self, *, user_id: str | None = None, session_id: str | None = None) -> int:
+        """Delete one user's memories of this agent and tenant; return the row count.
+
+        ``user_id`` defaults to this client's user. A client bound to a user can
+        only delete that user's rows; an unbound client serves deletion requests
+        for any named user. ``session_id`` narrows the deletion to one session.
+        Other agents keep their rows: run it once per agent for a full erasure.
+        """
+        target = user_id if user_id is not None else self.user_id
+        if not (target or "").strip():
+            raise MissingConfiguration("forget needs the user_id whose memories to delete")
+        if self.user_id and target != self.user_id:
+            raise ValueError("this client is bound to another user; use an unbound client")
+        parameters = (self.tenant_id, self.agent_name, target)
+        with self._connect().cursor() as cursor:
+            if session_id is None:
+                cursor.execute(_FORGET_USER_SQL, parameters)
+            else:
+                cursor.execute(_FORGET_SESSION_SQL, (*parameters, session_id))
+            return cursor.rowcount
 
     # -- structured entity features (feature gateway) ------------------------
 
