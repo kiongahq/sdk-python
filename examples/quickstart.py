@@ -1,9 +1,9 @@
 """Create a project and submit its first run against a local Kionga gateway."""
 
-from mlaiops_sdk import MLAIOpsClient
+from kionga import KiongaClient
 
 
-with MLAIOpsClient() as client:
+with KiongaClient() as client:
     project = client.create_project(
         "customer-churn",
         description="Predict customers likely to leave in the next 30 days",

@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from mlaiops_sdk import MLAIOpsClient
+from kionga import KiongaClient
 
 DESIGN = {"id": "agd-1", "project_id": "prj-1", "name": "Support", "description": "", "revision": 3,
           "nodes": [{"id": "input", "kind": "input", "name": "In"}, {"id": "output", "kind": "output", "name": "Out"}],
@@ -15,7 +15,7 @@ DESIGN = {"id": "agd-1", "project_id": "prj-1", "name": "Support", "description"
 
 
 def client_for(route):
-    return MLAIOpsClient("http://gateway", token="t", transport=httpx.MockTransport(route))
+    return KiongaClient("http://gateway", token="t", transport=httpx.MockTransport(route))
 
 
 def test_design_lifecycle_requests():

@@ -20,10 +20,10 @@ import httpx
 
 EMBEDDING_DIM = 256
 
-_ENV_CHECKPOINT_DSN = "MLAIOPS_CHECKPOINT_DSN"
-_ENV_MEMORY_DSN = "MLAIOPS_MEMORY_DSN"
+_ENV_CHECKPOINT_DSN = "KIONGA_CHECKPOINT_DSN"
+_ENV_MEMORY_DSN = "KIONGA_MEMORY_DSN"
 _ENV_DATABASE_URL = "DATABASE_URL"
-_ENV_FEATURE_GATEWAY = "MLAIOPS_FEATURE_GATEWAY_URL"
+_ENV_FEATURE_GATEWAY = "KIONGA_FEATURE_GATEWAY_URL"
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -55,7 +55,7 @@ def get_langgraph_checkpointer(dsn: str | None = None):
     except ImportError as error:  # pragma: no cover - environment guard
         raise MissingConfiguration(
             "get_langgraph_checkpointer requires langgraph-checkpoint-postgres; "
-            "install mlaiops-sdk[agents]"
+            "install kionga[agents]"
         ) from error
     return AsyncPostgresSaver.from_conn_string(dsn or _database_dsn(_ENV_CHECKPOINT_DSN))
 
@@ -156,7 +156,7 @@ class AgentMemoryClient:
             import psycopg
         except ImportError as error:  # pragma: no cover - environment guard
             raise MissingConfiguration(
-                "semantic memory requires psycopg; install mlaiops-sdk[agents]"
+                "semantic memory requires psycopg; install kionga[agents]"
             ) from error
         dsn = self._dsn or _database_dsn(_ENV_MEMORY_DSN)
         self._connection = psycopg.connect(dsn, autocommit=True)

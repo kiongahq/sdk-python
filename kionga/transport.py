@@ -11,7 +11,7 @@ across an untrusted network:
 Every other ``http://`` URL with a token raises :class:`InsecureTransportError`,
 including private-network addresses such as ``192.168.1.20``. To send a token
 over plaintext on purpose, pass ``allow_insecure_http=True`` or set
-``MLAIOPS_ALLOW_INSECURE_HTTP=1``; a warning is logged each time.
+``KIONGA_ALLOW_INSECURE_HTTP=1``; a warning is logged each time.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ import os
 
 import httpx
 
-logger = logging.getLogger("mlaiops_sdk")
+logger = logging.getLogger("kionga")
 
-ALLOW_ENV = "MLAIOPS_ALLOW_INSECURE_HTTP"
+ALLOW_ENV = "KIONGA_ALLOW_INSECURE_HTTP"
 _TRUE = {"1", "true", "yes", "on"}
 _CLUSTER_SUFFIXES = (".svc", ".svc.cluster.local")
 
@@ -34,7 +34,7 @@ class InsecureTransportError(ValueError):
 
 
 def insecure_http_allowed(explicit: bool | None = None) -> bool:
-    """The caller's explicit choice, else ``MLAIOPS_ALLOW_INSECURE_HTTP``."""
+    """The caller's explicit choice, else ``KIONGA_ALLOW_INSECURE_HTTP``."""
     if explicit is not None:
         return explicit
     return os.environ.get(ALLOW_ENV, "").strip().lower() in _TRUE

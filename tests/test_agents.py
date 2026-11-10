@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from mlaiops_sdk.agents import (
+from kionga.agents import (
     EMBEDDING_DIM,
     AgentMemoryClient,
     HashingEmbedder,
@@ -43,15 +43,15 @@ def test_hashing_embedder_similarity_orders_topics():
 
 
 def test_checkpointer_requires_dsn(monkeypatch):
-    monkeypatch.delenv("MLAIOPS_CHECKPOINT_DSN", raising=False)
+    monkeypatch.delenv("KIONGA_CHECKPOINT_DSN", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    with pytest.raises(MissingConfiguration, match="MLAIOPS_CHECKPOINT_DSN"):
+    with pytest.raises(MissingConfiguration, match="KIONGA_CHECKPOINT_DSN"):
         get_langgraph_checkpointer()
 
 
 def test_memory_requires_feature_gateway_config():
     client = AgentMemoryClient("support")
-    with pytest.raises(MissingConfiguration, match="MLAIOPS_FEATURE_GATEWAY_URL"):
+    with pytest.raises(MissingConfiguration, match="KIONGA_FEATURE_GATEWAY_URL"):
         client.get_entity_features("u123", "customer_profile")
 
 

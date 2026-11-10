@@ -3,7 +3,7 @@ requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mlaiops-sdk"
+name = "kionga"
 version = "0.2.0"
 readme = "README.md"
 description = "Python client for the Kionga control plane"
@@ -24,12 +24,12 @@ agents = [
     "psycopg[binary]>=3.1",
 ]
 runtime = [
-    "mlaiops-sdk[agents]",
+    "kionga[agents]",
     "fastapi>=0.111",
     "uvicorn>=0.30",
 ]
 dev = [
-    "mlaiops-sdk[agents,huggingface]",
+    "kionga[agents,huggingface]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
@@ -40,7 +40,7 @@ Homepage = "https://kiongahq.github.io/docs/"
 Source = "https://github.com/kiongahq/sdk-python"
 
 [tool.hatch.build.targets.wheel]
-packages = ["mlaiops_sdk"]
+packages = ["kionga"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

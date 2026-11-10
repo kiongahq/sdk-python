@@ -8,7 +8,7 @@ The Python SDK for Kionga: drive projects, pipelines, models and agents from not
 ## Background
 
 Kionga is a self-hosted platform for machine learning, data and AI agents. This SDK
-(`mlaiops_sdk`) is how Python code talks to it. `MLAIOpsClient` gives you typed
+(`kionga`) is how Python code talks to it. `KiongaClient` gives you typed
 calls to the Kionga API for projects, pipeline runs, models, agents, tools and
 connections. The optional agent modules add an LLM factory, a tool registry,
 agent memory on pgvector, LangGraph checkpoints and Langfuse tracing.
@@ -21,10 +21,10 @@ built on it.
 The SDK requires Python 3.11 or later. Install a tagged release from GitHub:
 
 ```bash
-pip install "mlaiops-sdk @ https://github.com/kiongahq/sdk-python/archive/refs/tags/v0.2.0.tar.gz"
+pip install "kionga @ https://github.com/kiongahq/sdk-python/archive/refs/tags/v0.2.0.tar.gz"
 
 # with the agent modules (LangGraph, LangChain, Langfuse, psycopg)
-pip install "mlaiops-sdk[agents] @ https://github.com/kiongahq/sdk-python/archive/refs/tags/v0.2.0.tar.gz"
+pip install "kionga[agents] @ https://github.com/kiongahq/sdk-python/archive/refs/tags/v0.2.0.tar.gz"
 ```
 
 Other extras: `runtime` (agents plus FastAPI and uvicorn), `huggingface`, `agno` and
@@ -33,29 +33,29 @@ Other extras: `runtime` (agents plus FastAPI and uvicorn), `huggingface`, `agno`
 PyPI publication is [on hold](https://github.com/kiongahq/sdk-python/issues/29)
 until a Kionga email is available. Use the GitHub releases above; reviewed SDK
 releases attach the verified wheel, source distribution and checksums.
-After PyPI publication is enabled, `python -m pip install mlaiops-sdk` installs
+After PyPI publication is enabled, `python -m pip install kionga` installs
 the published distribution. Pin the selected version in your dependency file. See
 [CONTRIBUTING.md](CONTRIBUTING.md#build-and-release) for trusted-publisher setup.
 
 ## Usage
 
 ```python
-from mlaiops_sdk import MLAIOpsClient
+from kionga import KiongaClient
 
-with MLAIOpsClient() as client:
+with KiongaClient() as client:
     project = client.create_project("customer-churn", template="production-ml")
     run = client.submit_pipeline(project.id)
     print(run.id, run.status)
 ```
 
-The client reads the gateway address from `MLAIOPS_URL` (default
-`http://localhost:8080`) and a personal API key from `MLAIOPS_TOKEN`. Inside a Kionga
-notebook or browser IDE, `MLAIOPS_URL` already points to the workspace's
+The client reads the gateway address from `KIONGA_URL` (default
+`http://localhost:8080`) and a personal API key from `KIONGA_TOKEN`. Inside a Kionga
+notebook or browser IDE, `KIONGA_URL` already points to the workspace's
 authenticated helper, so you need no key. Outside Kionga, create a key in
 **Settings > API keys** and keep it in a secret manager or your environment.
 
 The client refuses to send a key over plain `http://` to another machine, because
-anyone on the network path could read it. `MLAIOpsClient(...)` raises
+anyone on the network path could read it. `KiongaClient(...)` raises
 `InsecureTransportError`, and `record_trace` skips the trace and logs a warning.
 Plain HTTP stays allowed for:
 
@@ -64,14 +64,14 @@ Plain HTTP stays allowed for:
   Kubernetes name ending in `.svc` or `.svc.cluster.local`.
 
 Use an `https://` URL everywhere else. To send the key over plain HTTP on a network
-you trust, pass `allow_insecure_http=True` or set `MLAIOPS_ALLOW_INSECURE_HTTP=1`;
+you trust, pass `allow_insecure_http=True` or set `KIONGA_ALLOW_INSECURE_HTTP=1`;
 the SDK logs a warning each time.
 
 Agent memory is isolated per user. Pass the authenticated user, never a value from
 model output or a request body:
 
 ```python
-from mlaiops_sdk.agents import AgentMemoryClient
+from kionga.agents import AgentMemoryClient
 
 with AgentMemoryClient("support", session_id, user_id=user.id) as memory:
     memory.remember("Prefers email")

@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from mlaiops_sdk import MLAIOpsClient
-from mlaiops_sdk.huggingface import connect, download_model
-from mlaiops_sdk.models import Model
+from kionga import KiongaClient
+from kionga.huggingface import connect, download_model
+from kionga.models import Model
 
 
 def model_data():
@@ -59,6 +59,6 @@ def test_sdk_search_and_import():
             "project_id": "p1", "repo_id": "org/model", "revision": "v1"}
         return httpx.Response(201, json=model_data())
 
-    with MLAIOpsClient(token="platform-token", transport=httpx.MockTransport(handler)) as client:
+    with KiongaClient(token="platform-token", transport=httpx.MockTransport(handler)) as client:
         assert client.search_huggingface_models("org/model") == [{"id": "org/model"}]
         assert client.import_huggingface_model("p1", "org/model", revision="v1").version == "a" * 40

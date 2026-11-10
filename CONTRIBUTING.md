@@ -49,9 +49,9 @@ against a real pgvector database in a separate job. To run it locally:
 
 ```bash
 docker run -d --rm --name sdk-pgvector -p 5432:5432 \
-  -e POSTGRES_USER=mlaiops -e POSTGRES_PASSWORD=mlaiops-ci -e POSTGRES_DB=mlaiops \
+  -e POSTGRES_USER=kionga -e POSTGRES_PASSWORD=kionga-ci -e POSTGRES_DB=kionga \
   pgvector/pgvector:pg16
-TEST_MEMORY_DSN=postgresql://mlaiops:mlaiops-ci@localhost:5432/mlaiops \
+TEST_MEMORY_DSN=postgresql://kionga:kionga-ci@localhost:5432/kionga \
   python -m pytest -q tests/test_agents.py -k pgvector
 docker stop sdk-pgvector
 ```
@@ -73,7 +73,7 @@ PyPI publication is on hold until a Kionga email is available, tracked in
 variable `PYPI_PUBLISH_ENABLED` is `false`; an absent variable also disables it.
 GitHub release assets remain enabled while PyPI is on hold.
 
-Before enabling PyPI publication, configure the `mlaiops-sdk` trusted publisher
+Before enabling PyPI publication, configure the `kionga` trusted publisher
 for owner `kiongahq`, repository `sdk-python`, workflow `publish.yml`, and
 environment `pypi`. The environment accepts release tags only. Do not store a
 PyPI password or API token in Actions. After account setup and validation,
@@ -100,7 +100,7 @@ are `feat`, `fix`, `docs`, `test`, `ci` and `chore`.
 - A new client method must match an existing gateway route. If the route is new,
   link the [platform](https://github.com/kiongahq/platform) pull request that adds it.
 - Keep heavy imports out of the package root: new agent-only symbols go through the
-  lazy export table in `mlaiops_sdk/__init__.py`.
+  lazy export table in `kionga/__init__.py`.
 
 ## Reviewed scanner findings
 
