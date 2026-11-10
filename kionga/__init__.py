@@ -16,6 +16,7 @@ from .errors import (
     ValidationError,
 )
 from .retry import RetryPolicy
+from .teams import AgentDefinition, AgentTeam, TeamEvent, TeamRun, TeamRunTimeout, TeamWorker
 from .transport import InsecureTransportError
 from .models import (
     Agent,
@@ -37,6 +38,12 @@ from .models import (
 )
 
 __all__ = [
+    "AgentDefinition",
+    "AgentTeam",
+    "TeamEvent",
+    "TeamRun",
+    "TeamRunTimeout",
+    "TeamWorker",
     "AuthenticationError",
     "BadRequestError",
     "ConflictError",
