@@ -67,6 +67,49 @@ Use an `https://` URL everywhere else. To send the key over plain HTTP on a netw
 you trust, pass `allow_insecure_http=True` or set `KIONGA_ALLOW_INSECURE_HTTP=1`;
 the SDK logs a warning each time.
 
+### Errors and retries
+
+Every error response raises a subclass of `KiongaAPIError`, such as `NotFoundError`,
+`ConflictError` or `RateLimitError`, with the gateway's `code`, `message` and
+`request_id`. These still subclass `httpx.HTTPStatusError`. If the gateway can't be
+reached, the client raises `KiongaConnectionError`, or `KiongaTimeoutError` for a
+timeout.
+
+The client retries 429, 502, 503 and 504 responses with jittered backoff, and waits
+as long as `Retry-After` asks. It retries only when a repeat can't do the work twice:
+for GET, PUT and DELETE, for a POST that carries an `Idempotency-Key`, after a
+failed connect, and after a 429. Adjust or turn off retries with `RetryPolicy`:
+
+```python
+from kionga import KiongaClient, NotFoundError, RetryPolicy
+
+client = KiongaClient(retry=RetryPolicy(max_attempts=5, max_backoff=10))
+try:
+    client.get_team_run("atr-missing")
+except NotFoundError as error:
+    print(error.code, error.message)
+```
+
+### Agent teams
+
+```python
+with KiongaClient() as client:
+    fixer = client.create_agent_definition(project_id, "bug-fixer", instructions="Fix the bug.", model="llm")
+    team = client.create_agent_team(project_id, "code-change", [fixer.id],
+                                    coordinator={"instructions": "Plan, then delegate.", "model": "llm"})
+    run = client.start_team_run(team.id, "Fix the failing date test")
+    for event in client.team_run_events(run.id, follow=True):
+        print(event.seq, event.type)
+    print(client.get_team_run(run.id).status)
+```
+
+`update_agent_definition` and `update_agent_team` save on top of the revision you
+read, and raise `ConflictError` if someone saved after you did. `start_team_run`
+sends an idempotency key, so a retried start returns the same run. Only people
+start team runs: a personal API key works, but the gateway refuses the workspace
+credential a Kionga notebook uses and an agent run's credential, with
+`PermissionDeniedError`.
+
 Agent memory is isolated per user. Pass the authenticated user, never a value from
 model output or a request body:
 
