@@ -51,7 +51,7 @@ class Pipeline:
         if not self.steps:
             raise ValueError("pipeline must contain at least one step")
         return {
-            "apiVersion": "mlaiops.io/v1alpha1",
+            "apiVersion": "kionga.dev/v1alpha1",
             "kind": "KiongaPipeline",
             "metadata": {"name": self.name},
             "spec": {"steps": [asdict(step) for step in self.steps]},

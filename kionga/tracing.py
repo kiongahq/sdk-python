@@ -63,8 +63,8 @@ class LangfuseContext:
     ) -> None:
         self.project = project
         self.session_id = session_id or str(uuid.uuid4())
-        self.user_id = user_id or os.environ.get("MLAIOPS_USER_ID", "")
-        self.agent_id = agent_id or os.environ.get("MLAIOPS_AGENT_ID", "unassigned")
+        self.user_id = user_id or os.environ.get("KIONGA_USER_ID", "")
+        self.agent_id = agent_id or os.environ.get("KIONGA_AGENT_ID", "unassigned")
         self.handler = langfuse_handler()
         self._started = 0.0
         self._scores: list[dict[str, Any]] = []
@@ -133,8 +133,8 @@ def trace_llm(project: str) -> Callable:
         def wrapped(*args: Any, **kwargs: Any) -> Any:
             trace_id = str(uuid.uuid4())
             started = time.perf_counter()
-            previous = os.environ.get("MLAIOPS_TRACE_ID")
-            os.environ["MLAIOPS_TRACE_ID"] = trace_id
+            previous = os.environ.get("KIONGA_TRACE_ID")
+            os.environ["KIONGA_TRACE_ID"] = trace_id
             status = "succeeded"
             try:
                 return function(*args, **kwargs)
@@ -145,9 +145,9 @@ def trace_llm(project: str) -> Callable:
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 record_trace(
                     {
-                        "agent_id": os.environ.get("MLAIOPS_AGENT_ID", "unassigned"),
-                        "session_id": os.environ.get("MLAIOPS_SESSION_ID", trace_id),
-                        "user_id": os.environ.get("MLAIOPS_USER_ID", ""),
+                        "agent_id": os.environ.get("KIONGA_AGENT_ID", "unassigned"),
+                        "session_id": os.environ.get("KIONGA_SESSION_ID", trace_id),
+                        "user_id": os.environ.get("KIONGA_USER_ID", ""),
                         "name": function.__name__,
                         "status": status,
                         "current_node": function.__name__,
@@ -159,11 +159,11 @@ def trace_llm(project: str) -> Callable:
                     }
                 )
                 if previous is None:
-                    os.environ.pop("MLAIOPS_TRACE_ID", None)
+                    os.environ.pop("KIONGA_TRACE_ID", None)
                 else:
-                    os.environ["MLAIOPS_TRACE_ID"] = previous
+                    os.environ["KIONGA_TRACE_ID"] = previous
 
-        wrapped.mlaiops_project = project
+        wrapped.kionga_project = project
         return wrapped
 
     return decorate
@@ -171,17 +171,17 @@ def trace_llm(project: str) -> Callable:
 
 def record_trace(payload: dict[str, Any]) -> None:
     """Best-effort trace summary delivery to the platform gateway."""
-    gateway = os.environ.get("MLAIOPS_URL")
+    gateway = os.environ.get("KIONGA_URL")
     if not gateway:
         return
     headers = {}
-    if token := os.environ.get("MLAIOPS_TOKEN"):
+    if token := os.environ.get("KIONGA_TOKEN"):
         if not token_transport_ok(gateway):
             # Never put the token on the wire in cleartext, and never break
             # the caller: skip this trace instead.
             logger.warning(
-                "trace not sent: MLAIOPS_URL is plaintext HTTP to a non-local host; "
-                "use https:// or set MLAIOPS_ALLOW_INSECURE_HTTP=1"
+                "trace not sent: KIONGA_URL is plaintext HTTP to a non-local host; "
+                "use https:// or set KIONGA_ALLOW_INSECURE_HTTP=1"
             )
             return
         headers["Authorization"] = f"Bearer {token}"

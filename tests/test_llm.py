@@ -2,7 +2,7 @@
 
 import pytest
 
-from mlaiops_sdk.llm import MissingLLMConfiguration, MockChatModel, build_chat_model
+from kionga.llm import MissingLLMConfiguration, MockChatModel, build_chat_model
 
 
 def test_mock_backend_is_deterministic():
@@ -39,7 +39,7 @@ def test_anthropic_requires_key(monkeypatch):
 
 
 def test_openai_compatible_requires_base_url(monkeypatch):
-    monkeypatch.delenv("MLAIOPS_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("KIONGA_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     with pytest.raises(MissingLLMConfiguration, match="base_url"):
         build_chat_model("openai-compatible")
@@ -52,9 +52,9 @@ def test_openai_compatible_builds_without_key(monkeypatch):
 
 
 def test_backend_from_environment(monkeypatch):
-    monkeypatch.setenv("MLAIOPS_LLM_BACKEND", "mock")
+    monkeypatch.setenv("KIONGA_LLM_BACKEND", "mock")
     model = build_chat_model()
-    assert model._llm_type == "mlaiops-mock"
+    assert model._llm_type == "kionga-mock"
 
 
 def test_unknown_backend_rejected():

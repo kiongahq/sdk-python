@@ -6,9 +6,9 @@ import logging
 import httpx
 import pytest
 
-from mlaiops_sdk import InsecureTransportError, MLAIOpsClient
-from mlaiops_sdk.tracing import record_trace
-from mlaiops_sdk.transport import is_local_host
+from kionga import InsecureTransportError, KiongaClient
+from kionga.tracing import record_trace
+from kionga.transport import is_local_host
 
 
 def ok(request: httpx.Request) -> httpx.Response:
@@ -16,12 +16,12 @@ def ok(request: httpx.Request) -> httpx.Response:
 
 
 def client(url, **kwargs):
-    return MLAIOpsClient(url, transport=httpx.MockTransport(ok), **kwargs)
+    return KiongaClient(url, transport=httpx.MockTransport(ok), **kwargs)
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in ("MLAIOPS_ALLOW_INSECURE_HTTP", "MLAIOPS_TOKEN", "MLAIOPS_URL"):
+    for name in ("KIONGA_ALLOW_INSECURE_HTTP", "KIONGA_TOKEN", "KIONGA_URL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -34,7 +34,7 @@ def clean_env(monkeypatch):
     "http://[2001:db8::1]:8080",
     "http://127.0.0.1.nip.io",
     "http://localhost.example.com",
-    "http://mlaiops-gateway.mlaiops-system:8080",
+    "http://kionga-gateway.kionga-system:8080",
     "HTTP://Gateway.Example.COM",
 ])
 def test_token_over_plaintext_to_a_remote_host_raises(url):
@@ -43,10 +43,10 @@ def test_token_over_plaintext_to_a_remote_host_raises(url):
 
 
 def test_token_from_the_environment_is_checked_too(monkeypatch):
-    monkeypatch.setenv("MLAIOPS_TOKEN", "t")
-    monkeypatch.setenv("MLAIOPS_URL", "http://gateway.example.com")
+    monkeypatch.setenv("KIONGA_TOKEN", "t")
+    monkeypatch.setenv("KIONGA_URL", "http://gateway.example.com")
     with pytest.raises(InsecureTransportError):
-        MLAIOpsClient(transport=httpx.MockTransport(ok))
+        KiongaClient(transport=httpx.MockTransport(ok))
 
 
 @pytest.mark.parametrize("url", [
@@ -73,7 +73,7 @@ def test_plaintext_without_a_token_is_allowed():
 
 
 def test_explicit_opt_out_sends_and_warns(caplog):
-    with caplog.at_level(logging.WARNING, logger="mlaiops_sdk"):
+    with caplog.at_level(logging.WARNING, logger="kionga"):
         with client("http://gateway.example.com", token="t", allow_insecure_http=True) as c:
             assert c.health()["auth"] == "Bearer t"
     assert "plaintext HTTP to gateway.example.com" in caplog.text
@@ -81,21 +81,21 @@ def test_explicit_opt_out_sends_and_warns(caplog):
 
 @pytest.mark.parametrize("value", ["1", "true", "YES"])
 def test_environment_opt_out_sends_and_warns(monkeypatch, caplog, value):
-    monkeypatch.setenv("MLAIOPS_ALLOW_INSECURE_HTTP", value)
-    with caplog.at_level(logging.WARNING, logger="mlaiops_sdk"):
+    monkeypatch.setenv("KIONGA_ALLOW_INSECURE_HTTP", value)
+    with caplog.at_level(logging.WARNING, logger="kionga"):
         client("http://gateway.example.com", token="t").close()
-    assert "MLAIOPS_ALLOW_INSECURE_HTTP" in caplog.text
+    assert "KIONGA_ALLOW_INSECURE_HTTP" in caplog.text
 
 
 @pytest.mark.parametrize("value", ["0", "", "false", "no"])
 def test_environment_opt_out_needs_a_true_value(monkeypatch, value):
-    monkeypatch.setenv("MLAIOPS_ALLOW_INSECURE_HTTP", value)
+    monkeypatch.setenv("KIONGA_ALLOW_INSECURE_HTTP", value)
     with pytest.raises(InsecureTransportError):
         client("http://gateway.example.com", token="t")
 
 
 def test_explicit_false_overrides_the_environment(monkeypatch):
-    monkeypatch.setenv("MLAIOPS_ALLOW_INSECURE_HTTP", "1")
+    monkeypatch.setenv("KIONGA_ALLOW_INSECURE_HTTP", "1")
     with pytest.raises(InsecureTransportError):
         client("http://gateway.example.com", token="t", allow_insecure_http=False)
 
@@ -125,9 +125,9 @@ def posts(monkeypatch):
 
 
 def test_record_trace_never_sends_the_token_to_an_insecure_remote_url(monkeypatch, posts, caplog):
-    monkeypatch.setenv("MLAIOPS_URL", "http://gateway.example.com")
-    monkeypatch.setenv("MLAIOPS_TOKEN", "t")
-    with caplog.at_level(logging.WARNING, logger="mlaiops_sdk"):
+    monkeypatch.setenv("KIONGA_URL", "http://gateway.example.com")
+    monkeypatch.setenv("KIONGA_TOKEN", "t")
+    with caplog.at_level(logging.WARNING, logger="kionga"):
         record_trace({"agent_id": "a", "session_id": "s"})  # must not raise
     assert all("authorization" not in {k.lower() for k in kw.get("headers", {})} for _, kw in posts.calls)
     assert posts.calls == []
@@ -136,23 +136,23 @@ def test_record_trace_never_sends_the_token_to_an_insecure_remote_url(monkeypatc
 
 @pytest.mark.parametrize("url", ["http://gateway:8080", "http://127.0.0.1:8890", "https://gateway.example.com"])
 def test_record_trace_sends_the_token_to_trusted_urls(monkeypatch, posts, url):
-    monkeypatch.setenv("MLAIOPS_URL", url)
-    monkeypatch.setenv("MLAIOPS_TOKEN", "t")
+    monkeypatch.setenv("KIONGA_URL", url)
+    monkeypatch.setenv("KIONGA_TOKEN", "t")
     record_trace({"agent_id": "a", "session_id": "s"})
     (sent_url, kwargs), = posts.calls
     assert sent_url == f"{url}/api/v1/traces" and kwargs["headers"]["Authorization"] == "Bearer t"
 
 
 def test_record_trace_honors_the_opt_out(monkeypatch, posts):
-    monkeypatch.setenv("MLAIOPS_URL", "http://gateway.example.com")
-    monkeypatch.setenv("MLAIOPS_TOKEN", "t")
-    monkeypatch.setenv("MLAIOPS_ALLOW_INSECURE_HTTP", "1")
+    monkeypatch.setenv("KIONGA_URL", "http://gateway.example.com")
+    monkeypatch.setenv("KIONGA_TOKEN", "t")
+    monkeypatch.setenv("KIONGA_ALLOW_INSECURE_HTTP", "1")
     record_trace({"agent_id": "a", "session_id": "s"})
     assert posts.calls[0][1]["headers"]["Authorization"] == "Bearer t"
 
 
 def test_record_trace_without_a_token_is_unchanged(monkeypatch, posts):
-    monkeypatch.setenv("MLAIOPS_URL", "http://gateway.example.com")
+    monkeypatch.setenv("KIONGA_URL", "http://gateway.example.com")
     record_trace({"agent_id": "a", "session_id": "s"})
     assert posts.calls[0][1]["headers"] == {}
 

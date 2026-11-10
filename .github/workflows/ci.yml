@@ -37,13 +37,13 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:pg16
-        env: {POSTGRES_USER: mlaiops, POSTGRES_PASSWORD: mlaiops-ci, POSTGRES_DB: mlaiops}
+        env: {POSTGRES_USER: kionga, POSTGRES_PASSWORD: kionga-ci, POSTGRES_DB: kionga}
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U mlaiops"
+          --health-cmd "pg_isready -U kionga"
           --health-interval 5s --health-timeout 3s --health-retries 20
     env:
-      TEST_MEMORY_DSN: postgresql://mlaiops:mlaiops-ci@localhost:5432/mlaiops
+      TEST_MEMORY_DSN: postgresql://kionga:kionga-ci@localhost:5432/kionga
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

@@ -2,8 +2,8 @@ import json
 
 import httpx
 
-from mlaiops_sdk import MLAIOpsClient
-from mlaiops_sdk.models import PipelineRun
+from kionga import KiongaClient
+from kionga.models import PipelineRun
 
 
 def test_pipeline_run_accepts_empty_go_collections():
@@ -113,7 +113,7 @@ def handler(request: httpx.Request) -> httpx.Response:
 
 
 def test_client_health_and_projects() -> None:
-    with MLAIOpsClient(transport=httpx.MockTransport(handler)) as client:
+    with KiongaClient(transport=httpx.MockTransport(handler)) as client:
         assert client.health()["status"] == "ok"
         assert client.list_projects()[0].namespace == "demo"
         project = client.create_project(
@@ -125,20 +125,20 @@ def test_client_health_and_projects() -> None:
 
 
 def test_client_uses_gateway_url_from_environment(monkeypatch) -> None:
-    monkeypatch.setenv("MLAIOPS_URL", "http://gateway:8080/")
+    monkeypatch.setenv("KIONGA_URL", "http://gateway:8080/")
     seen = []
 
     def route(request: httpx.Request) -> httpx.Response:
         seen.append(str(request.url))
         return httpx.Response(200, json={"status": "ok"})
 
-    with MLAIOpsClient(transport=httpx.MockTransport(route)) as client:
+    with KiongaClient(transport=httpx.MockTransport(route)) as client:
         assert client.health()["status"] == "ok"
     assert seen == ["http://gateway:8080/api/v1/health"]
 
 
 def test_client_project_template_catalog() -> None:
-    with MLAIOpsClient(transport=httpx.MockTransport(handler)) as client:
+    with KiongaClient(transport=httpx.MockTransport(handler)) as client:
         templates = client.list_project_templates()
         assert templates[0].frameworks == ["langgraph"]
         assert (
@@ -148,7 +148,7 @@ def test_client_project_template_catalog() -> None:
 
 
 def test_client_deploys_resource_bounded_autoscaling_agent() -> None:
-    with MLAIOpsClient(transport=httpx.MockTransport(handler)) as client:
+    with KiongaClient(transport=httpx.MockTransport(handler)) as client:
         agent = client.deploy_agent(
             "prj-1",
             "support",
@@ -166,7 +166,7 @@ def test_client_deploys_resource_bounded_autoscaling_agent() -> None:
 
 
 def test_client_registers_framework_compatible_serving_image() -> None:
-    with MLAIOpsClient(transport=httpx.MockTransport(handler)) as client:
+    with KiongaClient(transport=httpx.MockTransport(handler)) as client:
         model = client.register_model(
             "prj-1",
             "churn-xgboost",

@@ -12,9 +12,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-_ENV_BACKEND = "MLAIOPS_LLM_BACKEND"
-_ENV_MODEL = "MLAIOPS_LLM_MODEL"
-_ENV_BASE_URL = "MLAIOPS_LLM_BASE_URL"
+_ENV_BACKEND = "KIONGA_LLM_BACKEND"
+_ENV_MODEL = "KIONGA_LLM_MODEL"
+_ENV_BASE_URL = "KIONGA_LLM_BASE_URL"
 
 _DEFAULT_MODELS = {
     "openai": "gpt-4o",
@@ -54,7 +54,7 @@ def build_chat_model(
         except ImportError as error:  # pragma: no cover - environment guard
             raise MissingLLMConfiguration(
                 "backend 'anthropic' requires langchain-anthropic; "
-                "install mlaiops-sdk[agents]"
+                "install kionga[agents]"
             ) from error
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
@@ -65,7 +65,7 @@ def build_chat_model(
             from langchain_openai import ChatOpenAI
         except ImportError as error:  # pragma: no cover - environment guard
             raise MissingLLMConfiguration(
-                "backend '%s' requires langchain-openai; install mlaiops-sdk[agents]" % backend
+                "backend '%s' requires langchain-openai; install kionga[agents]" % backend
             ) from error
         url = base_url or os.environ.get(_ENV_BASE_URL) or os.environ.get("OPENAI_BASE_URL")
         key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -73,7 +73,7 @@ def build_chat_model(
             raise MissingLLMConfiguration("OPENAI_API_KEY is not set")
         if backend != "openai" and not url:
             raise MissingLLMConfiguration(
-                "backend '%s' requires a base_url (MLAIOPS_LLM_BASE_URL)" % backend
+                "backend '%s' requires a base_url (KIONGA_LLM_BASE_URL)" % backend
             )
         return ChatOpenAI(
             model=model,
@@ -104,7 +104,7 @@ def MockChatModel(responses: list[Any] | None = None):
 
         @property
         def _llm_type(self) -> str:
-            return "mlaiops-mock"
+            return "kionga-mock"
 
         def bind_tools(self, tools: Any, **_: Any) -> "_MockChatModel":
             return self

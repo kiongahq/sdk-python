@@ -2,7 +2,7 @@
 
 import pytest
 
-from mlaiops_sdk.tools import get_tool, langchain_tools, register_tool, to_langchain_tool
+from kionga.tools import get_tool, langchain_tools, register_tool, to_langchain_tool
 
 
 @register_tool(

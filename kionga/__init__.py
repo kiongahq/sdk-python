@@ -1,6 +1,6 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
-from .client import MLAIOpsClient
+from .client import KiongaClient
 from .transport import InsecureTransportError
 from .models import (
     Agent,
@@ -34,7 +34,7 @@ __all__ = [
     "GitRepository",
     "InsecureTransportError",
     "LangfuseContext",
-    "MLAIOpsClient",
+    "KiongaClient",
     "Model",
     "PipelineRun",
     "PipelineDefinition",
@@ -49,12 +49,12 @@ __all__ = [
 ]
 
 _LAZY = {
-    "AgentMemoryClient": ("mlaiops_sdk.agents", "AgentMemoryClient"),
-    "get_langgraph_checkpointer": ("mlaiops_sdk.agents", "get_langgraph_checkpointer"),
-    "build_chat_model": ("mlaiops_sdk.llm", "build_chat_model"),
-    "LangfuseContext": ("mlaiops_sdk.tracing", "LangfuseContext"),
-    "trace_llm": ("mlaiops_sdk.tracing", "trace_llm"),
-    "register_tool": ("mlaiops_sdk.tools", "register_tool"),
+    "AgentMemoryClient": ("kionga.agents", "AgentMemoryClient"),
+    "get_langgraph_checkpointer": ("kionga.agents", "get_langgraph_checkpointer"),
+    "build_chat_model": ("kionga.llm", "build_chat_model"),
+    "LangfuseContext": ("kionga.tracing", "LangfuseContext"),
+    "trace_llm": ("kionga.tracing", "trace_llm"),
+    "register_tool": ("kionga.tools", "register_tool"),
 }
 
 
@@ -64,7 +64,7 @@ def __getattr__(name: str):
     try:
         module_name, attribute = _LAZY[name]
     except KeyError:
-        raise AttributeError(f"module 'mlaiops_sdk' has no attribute {name!r}") from None
+        raise AttributeError(f"module 'kionga' has no attribute {name!r}") from None
     import importlib
 
     return getattr(importlib.import_module(module_name), attribute)

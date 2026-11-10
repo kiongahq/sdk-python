@@ -23,10 +23,10 @@ from .models import (
 )
 from .transport import InsecureTransportError, require_token_transport
 
-__all__ = ["InsecureTransportError", "MLAIOpsClient"]
+__all__ = ["InsecureTransportError", "KiongaClient"]
 
 
-class MLAIOpsClient:
+class KiongaClient:
     """Typed client used from notebooks, training jobs, and automation."""
 
     def __init__(
@@ -40,15 +40,15 @@ class MLAIOpsClient:
         allow_insecure_http: bool | None = None,
     ) -> None:
         if base_url is None:
-            base_url = os.getenv("MLAIOPS_URL") or "http://localhost:8080"
-        token = token or os.getenv("MLAIOPS_TOKEN")
+            base_url = os.getenv("KIONGA_URL") or "http://localhost:8080"
+        token = token or os.getenv("KIONGA_TOKEN")
         if token:
             # Plaintext HTTP only to loopback or an in-cluster service name;
-            # otherwise opt in with allow_insecure_http / MLAIOPS_ALLOW_INSECURE_HTTP.
+            # otherwise opt in with allow_insecure_http / KIONGA_ALLOW_INSECURE_HTTP.
             require_token_transport(base_url, allow_insecure_http=allow_insecure_http)
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if actor:
-            headers["X-MLAIOps-Actor"] = actor
+            headers["X-Kionga-Actor"] = actor
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers=headers,
@@ -56,7 +56,7 @@ class MLAIOpsClient:
             transport=transport,
         )
 
-    def __enter__(self) -> MLAIOpsClient:
+    def __enter__(self) -> KiongaClient:
         return self
 
     def __exit__(self, *_: object) -> None:

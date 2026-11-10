@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from mlaiops_sdk import MLAIOpsClient
+from kionga import KiongaClient
 
 
 def workflow_handler(request: httpx.Request) -> httpx.Response:
@@ -26,7 +26,7 @@ def workflow_handler(request: httpx.Request) -> httpx.Response:
 
 
 def test_client_manages_function_flows() -> None:
-    with MLAIOpsClient(transport=httpx.MockTransport(workflow_handler)) as client:
+    with KiongaClient(transport=httpx.MockTransport(workflow_handler)) as client:
         function = client.deploy_function("prj-1", "score-fn", "ghcr.io/acme/score:1")
         assert function.memory == "512Mi"
         definition = client.create_pipeline_definition("prj-1", "score", "1", [{"name": "score", "kind": "function", "function": "score-fn", "resources": {}, "retries": 0}], execution_mode="functions")

@@ -11,7 +11,7 @@ def _hub():
     try:
         import huggingface_hub
     except ImportError as exc:
-        raise ImportError('Install "mlaiops-sdk[huggingface]" to download Hub models') from exc
+        raise ImportError('Install "kionga[huggingface]" to download Hub models') from exc
     return huggingface_hub
 
 

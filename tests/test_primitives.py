@@ -1,7 +1,7 @@
 import pytest
 
-from mlaiops_sdk.pipelines import FunctionStep, Pipeline, PipelineStep
-from mlaiops_sdk.tools import register_tool, registered_tools
+from kionga.pipelines import FunctionStep, Pipeline, PipelineStep
+from kionga.tools import register_tool, registered_tools
 
 
 def test_pipeline_compiles_dependency_order() -> None:

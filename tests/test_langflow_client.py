@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from mlaiops_sdk import MLAIOpsClient
+from kionga import KiongaClient
 
 
 def test_discovery_and_invocation_keep_credentials_on_gateway():
@@ -45,7 +45,7 @@ def test_discovery_and_invocation_keep_credentials_on_gateway():
             return httpx.Response(200, json={"answer": "world"})
         raise AssertionError(path)
 
-    with MLAIOpsClient(token="user-token", transport=httpx.MockTransport(route)) as client:
+    with KiongaClient(token="user-token", transport=httpx.MockTransport(route)) as client:
         assert client.list_knowledge_bases()[0]["id"] == "kb-1"
         assert client.list_datasets()[0]["id"] == "ds-1"
         assert client.list_dataset_objects("ds-1", prefix="churn/")["objects"][0]["key"] == "training/churn/part.csv"
@@ -81,7 +81,7 @@ def test_snapshot_workflow_preserves_revision_and_stable_route():
             return httpx.Response(200, json={"items": [{"id": "lfs-1"}]})
         return httpx.Response(200, json={"id": "lfs-1", "revision": 2})
 
-    with MLAIOpsClient(transport=httpx.MockTransport(route)) as client:
+    with KiongaClient(transport=httpx.MockTransport(route)) as client:
         assert client.list_langflow_flows("workspace-1")[0]["id"] == "flow-1"
         assert client.capture_langflow_flow("workspace-1", "flow-1", "prj-1", snapshot_id="lfs-1", revision=1)["revision"] == 2
         assert client.list_langflow_snapshots()[0]["id"] == "lfs-1"
@@ -98,7 +98,7 @@ def test_denied_resource_is_not_retried_or_disclosed():
     def denied(_: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not_found"})
 
-    with MLAIOpsClient(transport=httpx.MockTransport(denied)) as client:
+    with KiongaClient(transport=httpx.MockTransport(denied)) as client:
         with pytest.raises(httpx.HTTPStatusError) as error:
             client.search_knowledge_base("another-project", [0.1])
     assert error.value.response.status_code == 404
