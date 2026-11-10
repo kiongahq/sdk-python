@@ -1,6 +1,21 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
 from .client import KiongaClient
+from .errors import (
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    KiongaAPIError,
+    KiongaConnectionError,
+    KiongaError,
+    KiongaTimeoutError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
+from .retry import RetryPolicy
 from .transport import InsecureTransportError
 from .models import (
     Agent,
@@ -22,6 +37,19 @@ from .models import (
 )
 
 __all__ = [
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "KiongaAPIError",
+    "KiongaConnectionError",
+    "KiongaError",
+    "KiongaTimeoutError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "RetryPolicy",
+    "ServerError",
+    "ValidationError",
     "Agent",
     "AgentAutoscaling",
     "AgentResources",

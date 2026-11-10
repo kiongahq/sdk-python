@@ -21,9 +21,11 @@ from .models import (
     Readiness,
     Tool,
 )
+from .errors import KiongaConnectionError, KiongaTimeoutError, error_for_response
+from .retry import RetryPolicy
 from .transport import InsecureTransportError, require_token_transport
 
-__all__ = ["InsecureTransportError", "KiongaClient"]
+__all__ = ["InsecureTransportError", "KiongaClient", "RetryPolicy"]
 
 
 class KiongaClient:
@@ -38,7 +40,10 @@ class KiongaClient:
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
         allow_insecure_http: bool | None = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
+        self.retry = retry or RetryPolicy()
+        self._sleep = time.sleep
         if base_url is None:
             base_url = os.getenv("KIONGA_URL") or "http://localhost:8080"
         token = token or os.getenv("KIONGA_TOKEN")
@@ -286,13 +291,12 @@ class KiongaClient:
         timeout: float = 120.0,
     ) -> dict:
         """Run one agent turn through the gateway's runtime proxy."""
-        response = self._client.post(
+        return self._request(
+            "POST",
             f"/api/v1/agents/{agent_id}/invoke",
             json={"message": message, "session_id": session_id, "user_id": user_id},
             timeout=timeout,
         )
-        response.raise_for_status()
-        return response.json()
 
     def set_agent_traffic(self, agent_id: str, canary_weight: int) -> Agent:
         return Agent.model_validate(
@@ -649,8 +653,31 @@ class KiongaClient:
         return self._request("GET", path)["items"]
 
     def _request(self, method: str, path: str, **kwargs: object):
-        response = self._client.request(method, path, **kwargs)
-        response.raise_for_status()
-        if response.status_code == 204:
+        response = self._send(method, path, **kwargs)
+        if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def _send(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        """Send with retries (see ``RetryPolicy``); raise a typed error on failure."""
+        request = self._client.build_request(method, path, **kwargs)
+        attempt = 1
+        while True:
+            try:
+                response = self._client.send(request)
+            except httpx.TransportError as error:
+                if attempt < self.retry.max_attempts and self.retry.should_retry_error(request, error):
+                    self._sleep(self.retry.delay(attempt))
+                    attempt += 1
+                    continue
+                kind = KiongaTimeoutError if isinstance(error, httpx.TimeoutException) else KiongaConnectionError
+                raise kind(f"{method} {request.url.path} failed after {attempt} attempt(s): {error}") from error
+            if response.is_success:
+                return response
+            if attempt < self.retry.max_attempts and self.retry.should_retry_status(request, response):
+                response.close()
+                self._sleep(self.retry.delay(attempt, response))
+                attempt += 1
+                continue
+            response.read()
+            raise error_for_response(response)
