@@ -6,7 +6,7 @@ import pytest
 
 import kionga
 from kionga import KiongaConnectionError, NotFoundError, RetryPolicy, StreamError
-from kionga.sse import parse_events
+from kionga._sync.sse import parse_events
 
 
 def sse(*blocks):
