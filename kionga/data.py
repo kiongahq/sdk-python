@@ -7,12 +7,15 @@ module manages the catalog that describes them.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Iterator
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from .sse import StreamError
 
 __all__ = ["DataAPI", "FeatureMaterialization", "FeatureView", "LogEntry"]
 
@@ -148,16 +151,26 @@ class DataAPI:
                    since: datetime | None = None, until: datetime | None = None, after: int = 0,
                    before: int = 0, limit: int = 0, newest_first: bool = False) -> list[LogEntry]:
         """One page of log entries matching every filter given."""
-        params: dict[str, Any] = {
-            "project_id": project_id, "run_id": run_id, "pipeline_id": pipeline_id, "node": node, "q": text,
-            "source": _csv(sources, LOG_SOURCES, "sources"),
-            "severity": _csv(severities, LOG_SEVERITIES, "severities"),
-            "since": _rfc3339(since), "until": _rfc3339(until),
-            "after": after or "", "before": before or "", "limit": limit or "",
-            "order": "desc" if newest_first else "",
-        }
-        body = self._request("GET", "/api/v1/logs", params={k: v for k, v in params.items() if v != ""})
+        params = _log_filters(project_id=project_id, run_id=run_id, pipeline_id=pipeline_id, node=node,
+                              sources=sources, severities=severities, text=text, since=since, until=until)
+        params.update({k: v for k, v in {"after": after, "before": before, "limit": limit,
+                                         "order": "desc" if newest_first else ""}.items() if v})
+        body = self._request("GET", "/api/v1/logs", params=params)
         return [LogEntry.model_validate(item) for item in _items(body)]
+
+    def stream_logs(self, *, after: int = 0, **filters: Any) -> Iterator[LogEntry]:
+        """Yield new matching entries as they are written, over server-sent events,
+        until you stop iterating. Takes the same filters as ``query_logs``, and
+        reconnects from the last entry if the connection drops."""
+        params = _log_filters(**filters)
+        if after:
+            params["after"] = str(after)
+        for message in self._stream("/api/v1/logs/stream", params=params):
+            if message.event == "error":
+                raise StreamError(f"log stream: {json.loads(message.data)}")
+            if message.event == "logs":
+                for item in json.loads(message.data):
+                    yield LogEntry.model_validate(item)
 
     def iter_logs(self, *, follow: bool = False, poll_interval: float = 2.0, page_size: int = 500,
                   **filters: Any) -> Iterator[LogEntry]:
@@ -179,6 +192,18 @@ class DataAPI:
                 if not follow:
                     return
                 self._sleep(poll_interval)
+
+
+def _log_filters(*, project_id: str = "", run_id: str = "", pipeline_id: str = "", node: str = "",
+                 sources: Iterable[str] | str = (), severities: Iterable[str] | str = (), text: str = "",
+                 since: datetime | None = None, until: datetime | None = None) -> dict[str, str]:
+    params = {
+        "project_id": project_id, "run_id": run_id, "pipeline_id": pipeline_id, "node": node, "q": text,
+        "source": _csv(sources, LOG_SOURCES, "sources"),
+        "severity": _csv(severities, LOG_SEVERITIES, "severities"),
+        "since": _rfc3339(since), "until": _rfc3339(until),
+    }
+    return {k: v for k, v in params.items() if v}
 
 
 def _rfc3339(value: datetime | None) -> str:

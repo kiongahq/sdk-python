@@ -5,6 +5,7 @@ Mixed into ``KiongaClient``; see docs/reference/agent-teams.md for the contract.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Iterator
@@ -212,6 +213,19 @@ class TeamsAPI:
                 return
             if not events:
                 self._sleep(poll_interval)
+
+    def stream_team_run_events(self, run_id: str, *, after: int = 0) -> Iterator[TeamEvent]:
+        """Yield events as they happen, over server-sent events, until the run ends.
+
+        The gateway closes the stream after five minutes; it is reopened from the
+        last event, so a long run is followed without gaps or repeats.
+        """
+        path = f"/api/v1/team-runs/{_path(run_id)}/events/stream"
+        for message in self._stream(path, params={"after": after}):
+            if message.event == "end":
+                return
+            if message.event == "run":
+                yield TeamEvent.model_validate(json.loads(message.data))
 
     def wait_for_team_run(self, run_id: str, *, timeout: float = 3600.0, poll_interval: float = 2.0) -> TeamRun:
         """Poll until the run succeeds, fails or is cancelled. Raises ``TeamRunTimeout``."""

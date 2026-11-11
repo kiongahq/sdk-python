@@ -24,13 +24,14 @@ from .models import (
 from .errors import KiongaConnectionError, KiongaTimeoutError, error_for_response
 from .retry import RetryPolicy
 from .data import DataAPI
+from .sse import StreamingAPI
 from .teams import TeamsAPI
 from .transport import InsecureTransportError, require_token_transport
 
 __all__ = ["InsecureTransportError", "KiongaClient", "RetryPolicy"]
 
 
-class KiongaClient(TeamsAPI, DataAPI):
+class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
     """Typed client used from notebooks, training jobs, and automation."""
 
     def __init__(

@@ -52,8 +52,11 @@ def test_an_agent_team_runs_end_to_end(client):
 
         run = client.start_team_run(team.id, "say done", idempotency_key=name)
         assert client.start_team_run(team.id, "say done", idempotency_key=name).id == run.id
+        streamed = list(client.stream_team_run_events(run.id))
+        assert streamed and streamed[-1].type == "run.finished", "the stream ends with the run"
         final = client.wait_for_team_run(run.id, timeout=300)
         events = list(client.team_run_events(run.id))
+        assert [e.seq for e in streamed] == [e.seq for e in events], "streaming and polling agree"
         assert final.finished and events and events[-1].type == "run.finished"
         assert [e.seq for e in events] == sorted(e.seq for e in events)
 
@@ -87,3 +90,15 @@ def test_features_storage_and_logs_read_from_a_real_gateway(client):
     assert [e.sequence for e in entries] == sorted(e.sequence for e in entries)
     with pytest.raises(ValueError):
         client.query_logs(severities=["fatal"])
+
+
+def test_a_log_stream_delivers_a_line_written_while_it_is_open(client):
+    projects = client.list_projects()
+    if not projects:
+        pytest.skip("the gateway has no project to run in")
+    latest = client.query_logs(newest_first=True, limit=1)
+    stream = client.stream_logs(after=latest[0].sequence if latest else 0)
+    run = client.submit_pipeline(projects[0].id)
+    first = next(stream)
+    assert first.sequence > (latest[0].sequence if latest else 0)
+    assert any(e.run_id == run.id for e in [first, *[next(stream) for _ in range(2)]])
