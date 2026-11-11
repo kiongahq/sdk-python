@@ -1,6 +1,24 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
-from .client import KiongaClient
+from .client import AsyncKiongaClient, KiongaClient
+from .errors import (
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    KiongaAPIError,
+    KiongaConnectionError,
+    KiongaError,
+    KiongaTimeoutError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServerError,
+    ValidationError,
+)
+from .data import FeatureMaterialization, FeatureView, LogEntry
+from .retry import RetryPolicy
+from .sse import StreamError
+from .teams import AgentDefinition, AgentTeam, TeamEvent, TeamRun, TeamRunTimeout, TeamWorker
 from .transport import InsecureTransportError
 from .models import (
     Agent,
@@ -22,6 +40,30 @@ from .models import (
 )
 
 __all__ = [
+    "AsyncKiongaClient",
+    "StreamError",
+    "FeatureMaterialization",
+    "FeatureView",
+    "LogEntry",
+    "AgentDefinition",
+    "AgentTeam",
+    "TeamEvent",
+    "TeamRun",
+    "TeamRunTimeout",
+    "TeamWorker",
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "KiongaAPIError",
+    "KiongaConnectionError",
+    "KiongaError",
+    "KiongaTimeoutError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "RetryPolicy",
+    "ServerError",
+    "ValidationError",
     "Agent",
     "AgentAutoscaling",
     "AgentResources",
