@@ -1,6 +1,6 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
-from .client import KiongaClient
+from .client import AsyncKiongaClient, KiongaClient
 from .errors import (
     AuthenticationError,
     BadRequestError,
@@ -40,6 +40,7 @@ from .models import (
 )
 
 __all__ = [
+    "AsyncKiongaClient",
     "StreamError",
     "FeatureMaterialization",
     "FeatureView",

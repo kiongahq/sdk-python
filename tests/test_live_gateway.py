@@ -102,3 +102,30 @@ def test_a_log_stream_delivers_a_line_written_while_it_is_open(client):
     first = next(stream)
     assert first.sequence > (latest[0].sequence if latest else 0)
     assert any(e.run_id == run.id for e in [first, *[next(stream) for _ in range(2)]])
+
+
+@pytest.mark.asyncio
+async def test_the_async_client_runs_a_team_against_a_real_gateway(client):
+    projects = client.list_projects()
+    if not projects:
+        pytest.skip("the gateway has no project to run in")
+    name = f"sdk-async-{time.time_ns()}"
+    async with kionga.AsyncKiongaClient(BASE) as aclient:
+        aclient._client.cookies = client._client.cookies
+        aclient._client.headers["Origin"] = BASE
+        definition = await aclient.create_agent_definition(
+            projects[0].id, name, description="checks", instructions="Reply done.", model="llm",
+            limits={"max_turns": 3})
+        try:
+            team = await aclient.create_agent_team(projects[0].id, name, [definition.id], coordinator={
+                "instructions": "Spawn the member once, then finish.", "model": "llm"})
+            try:
+                run = await aclient.start_team_run(team.id, "say done")
+                streamed = [event async for event in aclient.stream_team_run_events(run.id)]
+                assert streamed[-1].type == "run.finished"
+                assert (await aclient.get_team_run(run.id)).finished
+                assert [e.sequence async for e in aclient.iter_logs(page_size=5)]
+            finally:
+                await aclient.delete_agent_team(team.id)
+        finally:
+            await aclient.delete_agent_definition(definition.id)
