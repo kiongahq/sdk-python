@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/kiongahq/sdk-python/compare/v0.3.0...v0.3.1) (2026-11-11)
+
+
+### Features
+
+* typed errors, safe retries and agent teams ([#53](https://github.com/kiongahq/sdk-python/issues/53)) ([5c690b2](https://github.com/kiongahq/sdk-python/commit/5c690b2b58cae5de8a0a108caa80b193b96a41c2))
+
 ## [0.3.0](https://github.com/kiongahq/sdk-python/compare/v0.2.0...v0.3.0) (2026-11-10)
 
 
