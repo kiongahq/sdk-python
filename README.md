@@ -163,6 +163,15 @@ with AgentMemoryClient("support", session_id, user_id=user.id) as memory:
 stored before this scoping have no owner: they stay in the table, and only
 `scope="agent"` can read them.
 
+## Worked example
+
+[`notebooks/eda.ipynb`](notebooks/eda.ipynb) answers a question teams face every
+time training runs again: **which model version should go to production?** It
+explores every registered version against production, traces each one to its
+training run and that run's logs, applies promotion rules you can edit, and then
+promotes the winner and archives the version it replaces. It only changes
+anything when you set `PROMOTE = True`.
+
 ## Documentation
 
 - Product documentation: [Python SDK reference](https://kiongahq.github.io/docs/reference/python-sdk/)
