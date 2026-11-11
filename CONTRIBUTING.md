@@ -22,6 +22,18 @@ pip install -e ".[dev]"
 The `dev` extra installs the `agents` and `huggingface` extras plus pytest,
 pytest-asyncio and ruff.
 
+## Change the client
+
+Edit the async source in `kionga/_async/`, then regenerate the sync client:
+
+```bash
+python scripts/unasync.py           # writes kionga/_sync
+python scripts/unasync.py --check   # what the tests check
+```
+
+Don't edit `kionga/_sync/`, because the next run overwrites it. If a new async
+construct has no sync form yet, add a rule to `RULES` in `scripts/unasync.py`.
+
 ## Run the checks
 
 CI calls the shared Python workflow
@@ -54,6 +66,14 @@ docker run -d --rm --name sdk-pgvector -p 5432:5432 \
 TEST_MEMORY_DSN=postgresql://kionga:kionga-ci@localhost:5432/kionga \
   python -m pytest -q tests/test_agents.py -k pgvector
 docker stop sdk-pgvector
+```
+
+`tests/test_live_gateway.py` runs both clients against a running stack. It signs in
+as the local admin, because only people start team runs, and cleans up what it
+creates. CI skips it.
+
+```bash
+KIONGA_LIVE_URL=http://127.0.0.1:8080 python -m pytest -q tests/test_live_gateway.py
 ```
 
 ## Build and release

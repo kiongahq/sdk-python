@@ -113,6 +113,20 @@ credential a Kionga notebook uses and an agent run's credential, with
 `stream_team_run_events(run.id)` follows the same events over server-sent events
 instead of polling, and ends with the run.
 
+### Async
+
+`AsyncKiongaClient` has every method of `KiongaClient`, awaited, and returns the
+same models and errors:
+
+```python
+from kionga import AsyncKiongaClient
+
+async with AsyncKiongaClient() as client:
+    run = await client.start_team_run(team_id, "Fix the failing date test")
+    async for event in client.stream_team_run_events(run.id):
+        print(event.seq, event.type)
+```
+
 ### Features, storage and logs
 
 ```python

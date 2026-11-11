@@ -23,13 +23,28 @@ module `__getattr__`, so `import kionga` stays light.
 
 ## Code map
 
-### `kionga/client.py`
+### `kionga/_async/` and `kionga/_sync/`
 
-`KiongaClient`, a context manager around one `httpx.Client`. The base URL comes
-from the argument, then `KIONGA_URL`, then `http://localhost:8080`; the bearer
-token from the argument or `KIONGA_TOKEN`. Each public method maps to one gateway
-route. `_request` raises `httpx.HTTPStatusError` for non-2xx responses and returns
-`None` for `204`; `_page` unwraps the `items` array of list endpoints.
+The HTTP client is written once, async, in `kionga/_async/`: `AsyncKiongaClient` in
+`client.py`, with agent teams (`teams.py`), the feature catalog, storage and logs
+(`data.py`), and server-sent event streams (`sse.py`) mixed in.
+`scripts/unasync.py` generates `kionga/_sync/` from it by whole-word replacement
+(`async def` to `def`, `httpx.AsyncClient` to `httpx.Client`, and so on), the way
+httpcore does. Never edit `_sync` by hand: `tests/test_generated_sync.py` fails when
+it doesn't match the source.
+
+The base URL comes from the argument, then `KIONGA_URL`, then
+`http://localhost:8080`; the bearer token from the argument or `KIONGA_TOKEN`. Every
+request goes through `_send`. It retries what `RetryPolicy` allows, and raises a
+`KiongaAPIError` subclass for an error status. `_request` returns the JSON body, or
+`None` for an empty one, and `_page` unwraps the `items` array of list endpoints.
+`_stream` reads server-sent events and reconnects with `Last-Event-ID`.
+
+### `kionga/client.py`, `teams.py`, `data.py`, `sse.py`, `errors.py`, `retry.py`
+
+The public import paths. `client.py` re-exports both clients. The other modules
+hold what both clients share: response models, errors, the retry policy and pure
+helpers. So `KiongaClient` and `AsyncKiongaClient` return the same classes.
 
 ### `kionga/transport.py`
 
@@ -110,6 +125,10 @@ is a seed notebook (excluded from ruff). `tests/` holds one test module per area
   caught and dropped.
 - **Light core import.** The client layer must import without any optional extra
   installed.
+- **One client, written once.** Change `kionga/_async`, then run
+  `python scripts/unasync.py`. The sync client is generated.
+- **Retries never run work twice.** Only idempotent methods, requests with an
+  `Idempotency-Key`, failed connects and 429 responses are repeated.
 - **One route, one method.** Client methods mirror gateway routes; the gateway is
   the authority on validation and authorization.
 
