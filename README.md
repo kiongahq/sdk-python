@@ -110,6 +110,27 @@ start team runs: a personal API key works, but the gateway refuses the workspace
 credential a Kionga notebook uses and an agent run's credential, with
 `PermissionDeniedError`.
 
+`stream_team_run_events(run.id)` follows the same events over server-sent events
+instead of polling, and ends with the run.
+
+### Features, storage and logs
+
+```python
+with KiongaClient() as client:
+    for view in client.list_features():
+        print(view.name, view.version, [run.status for run in client.feature_lineage(view.name)])
+    for item in client.walk_storage("kionga-features"):
+        print(item["key"])
+    for entry in client.iter_logs(run_id=run_id, severities=["warn", "error"]):
+        print(entry.sequence, entry.severity, entry.message)
+    for entry in client.stream_logs(project_id=project_id):  # new lines, until you stop
+        print(entry.message)
+```
+
+Log filters the gateway doesn't know, and timestamps without a timezone, raise
+`ValueError` before anything is sent, because the gateway would ignore them and
+return more than you asked for.
+
 Agent memory is isolated per user. Pass the authenticated user, never a value from
 model output or a request body:
 
