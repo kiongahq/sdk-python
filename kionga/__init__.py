@@ -15,6 +15,7 @@ from .errors import (
     ServerError,
     ValidationError,
 )
+from .data import FeatureMaterialization, FeatureView, LogEntry
 from .retry import RetryPolicy
 from .teams import AgentDefinition, AgentTeam, TeamEvent, TeamRun, TeamRunTimeout, TeamWorker
 from .transport import InsecureTransportError
@@ -38,6 +39,9 @@ from .models import (
 )
 
 __all__ = [
+    "FeatureMaterialization",
+    "FeatureView",
+    "LogEntry",
     "AgentDefinition",
     "AgentTeam",
     "TeamEvent",

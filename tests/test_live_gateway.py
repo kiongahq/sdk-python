@@ -65,3 +65,25 @@ def test_an_agent_team_runs_end_to_end(client):
                 delete(resource_id)
             except kionga.KiongaAPIError:
                 pass
+
+
+def test_features_storage_and_logs_read_from_a_real_gateway(client):
+    features = client.list_features()
+    for view in features[:3]:
+        versions = client.feature_versions(view.name)
+        assert versions and all(v.name == view.name for v in versions)
+        for run in client.feature_lineage(view.name):
+            assert run.view == view.name
+    assert isinstance(client.feature_stores(), list) and isinstance(client.feature_views(), list)
+
+    buckets = client.list_buckets()
+    if buckets:
+        name = buckets[0] if isinstance(buckets[0], str) else buckets[0]["name"]
+        listing = client.list_storage_objects(name)
+        assert listing["bucket"] == name and "objects" in listing
+        assert isinstance(list(client.walk_storage(name)), list)
+
+    entries = list(client.iter_logs(page_size=50))
+    assert [e.sequence for e in entries] == sorted(e.sequence for e in entries)
+    with pytest.raises(ValueError):
+        client.query_logs(severities=["fatal"])
