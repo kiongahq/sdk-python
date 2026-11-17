@@ -92,6 +92,7 @@ def test_wrong_root_empty_archive_duplicates_and_folder_for_file_are_reported(tm
     folder.type = tarfile.DIRTYPE
     stand_in = _raw(tmp_path, [folder])
     assert check_sdist.problems(stand_in, ALLOWED, TRACKED, ROOT_NAME) == [
+        "archive holds no files",
         "kionga/__init__.py: a folder where a file is expected"]
 
 
@@ -109,6 +110,7 @@ def test_links_are_reported_even_under_a_tracked_name(tmp_path):
             info.linkname = "/etc/passwd"
             tar.addfile(info)
     assert check_sdist.problems(path, ALLOWED, TRACKED, ROOT_NAME) == [
+        "archive holds no files",
         "kionga/__init__.py: not a regular file",
         "tests/test_client.py: not a regular file",
     ]
