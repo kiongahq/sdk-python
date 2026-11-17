@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.2](https://github.com/kiongahq/sdk-python/compare/v0.3.1...v0.3.2) (2026-11-17)
+
+
+### Documentation
+
+* turn eda.ipynb into a model promotion review ([#57](https://github.com/kiongahq/sdk-python/issues/57)) ([6d55706](https://github.com/kiongahq/sdk-python/commit/6d55706551d435d93377ef0a80ca366472d88e45))
+
+
+### Build and dependencies
+
+* limit the source distribution to a declared file list ([#60](https://github.com/kiongahq/sdk-python/issues/60)) ([5af8ab8](https://github.com/kiongahq/sdk-python/commit/5af8ab8a5a6b6296ec48a0d92fd5740f2a98ebab))
+
 ## [0.3.1](https://github.com/kiongahq/sdk-python/compare/v0.3.0...v0.3.1) (2026-11-11)
 
 
