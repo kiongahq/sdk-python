@@ -42,6 +42,21 @@ Source = "https://github.com/kiongahq/sdk-python"
 [tool.hatch.build.targets.wheel]
 packages = ["kionga"]
 
+[tool.hatch.build.targets.sdist]
+# Ship an explicit list. Without one, hatchling packs every file in the working
+# tree that .gitignore does not exclude, tracked or not, including CI and
+# release configuration. scripts/check_sdist.py enforces this list in CI.
+only-include = [
+    "kionga",
+    "tests",
+    "examples",
+    "notebooks",
+    "scripts",
+    "ARCHITECTURE.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
