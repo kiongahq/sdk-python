@@ -9,7 +9,8 @@ Two rules, both checked for every file in the archive:
 2. The file is in the checked-out commit. A file that exists only in a working
    tree or the index is never part of a release, even inside an included folder.
 
-Links, and anything outside the single distribution folder, are rejected.
+Links, duplicates, an empty archive and anything outside the single
+`<name>-<version>` folder are rejected.
 
 Run in CI after `python -m build`, before the archive is uploaded.
 """
@@ -42,31 +43,45 @@ def tracked_files(root: Path = ROOT) -> set[str]:
     return {path for path in listing.split("\0") if path}
 
 
-def problems(archive: Path, allowed: set[str], tracked: set[str]) -> list[str]:
-    """One line per archive member that breaks a rule, sorted.
+def expected_root(pyproject: Path = ROOT / "pyproject.toml") -> str:
+    """The single folder a source distribution of this project must have."""
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+    return f"{project['name'].replace('-', '_')}-{project['version']}"
 
-    Every member must sit under the single distribution folder, and every
-    member that is not a folder must be a regular file.
+
+def problems(archive: Path, allowed: set[str], tracked: set[str], root: str | None = None) -> list[str]:
+    """One line per rule the archive breaks, sorted.
+
+    Every member must sit under the one distribution folder, appear once, and,
+    unless it is a folder, be a regular file.
     """
+    root = root or expected_root()
     found = []
-    roots = set()
+    seen = set()
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
+    if not members:
+        found.append("archive is empty")
     for member in members:
-        root, _, path = member.name.partition("/")
-        roots.add(root)
+        top, _, path = member.name.partition("/")
+        if top != root:
+            found.append(f"{member.name}: outside the distribution folder {root}")
+            continue
+        if member.name in seen:
+            found.append(f"{path}: appears more than once")
+        seen.add(member.name)
         if member.isdir():
+            if path in tracked:
+                found.append(f"{path}: a folder where a file is expected")
             continue
         if not path:
-            found.append(f"{member.name}: outside the distribution folder")
+            found.append(f"{member.name}: outside the distribution folder {root}")
         elif not member.isreg():
             found.append(f"{path}: not a regular file")
         elif path.split("/")[0] not in allowed:
             found.append(f"{path}: not in the declared list")
         elif path not in tracked and path not in GENERATED:
             found.append(f"{path}: not tracked by Git")
-    if len(roots) > 1:
-        found.append(f"more than one top-level folder: {', '.join(sorted(roots))}")
     return sorted(found)
 
 
