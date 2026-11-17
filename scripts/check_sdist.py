@@ -60,8 +60,8 @@ def problems(archive: Path, allowed: set[str], tracked: set[str], root: str | No
     seen = set()
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
-    if not members:
-        found.append("archive is empty")
+    if not any(member.isreg() for member in members):
+        found.append("archive holds no files")
     for member in members:
         top, _, path = member.name.partition("/")
         if top != root:

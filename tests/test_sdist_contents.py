@@ -81,7 +81,11 @@ def test_wrong_root_empty_archive_duplicates_and_folder_for_file_are_reported(tm
     wrong = _raw(tmp_path, [tarfile.TarInfo("kionga-9.9.9/kionga/__init__.py")])
     assert len(check_sdist.problems(wrong, ALLOWED, TRACKED, ROOT_NAME)) == 1
     empty = _raw(tmp_path, [])
-    assert check_sdist.problems(empty, ALLOWED, TRACKED, ROOT_NAME) == ["archive is empty"]
+    assert check_sdist.problems(empty, ALLOWED, TRACKED, ROOT_NAME) == ["archive holds no files"]
+    only_folder = tarfile.TarInfo("kionga-0.0.0/")
+    only_folder.type = tarfile.DIRTYPE
+    hollow = _raw(tmp_path, [only_folder])
+    assert check_sdist.problems(hollow, ALLOWED, TRACKED, ROOT_NAME) == ["archive holds no files"]
     twice = _raw(tmp_path, [tarfile.TarInfo("kionga-0.0.0/kionga/__init__.py")] * 2)
     assert check_sdist.problems(twice, ALLOWED, TRACKED, ROOT_NAME) == ["kionga/__init__.py: appears more than once"]
     folder = tarfile.TarInfo("kionga-0.0.0/kionga/__init__.py")
