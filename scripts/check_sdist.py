@@ -6,8 +6,10 @@ Two rules, both checked for every file in the archive:
 
 1. Its top-level entry is in `only-include` from pyproject.toml, or is one of
    the files the build backend always adds.
-2. The file is tracked by Git. A file that exists only in a working tree is
-   never part of a release, even inside an included folder.
+2. The file is in the checked-out commit. A file that exists only in a working
+   tree or the index is never part of a release, even inside an included folder.
+
+Links, and anything outside the single distribution folder, are rejected.
 
 Run in CI after `python -m build`, before the archive is uploaded.
 """
@@ -31,28 +33,41 @@ def allowed_entries(pyproject: Path = ROOT / "pyproject.toml") -> set[str]:
 
 
 def tracked_files(root: Path = ROOT) -> set[str]:
-    """Every path Git tracks, relative to the repository root."""
-    listing = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+    """Every path in the checked-out commit, relative to the repository root.
+
+    Read from HEAD, not the index, so a file that is only staged does not count.
+    """
+    listing = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "--name-only", "-z", "HEAD"],
                              check=True, capture_output=True, text=True).stdout
     return {path for path in listing.split("\0") if path}
 
 
-def archive_files(archive: Path) -> list[str]:
-    """Paths of the regular files in the archive, without the leading folder."""
-    with tarfile.open(archive) as tar:
-        names = [member.name.split("/", 1) for member in tar.getmembers() if not member.isdir()]
-    return sorted(parts[1] for parts in names if len(parts) == 2 and parts[1])
-
-
 def problems(archive: Path, allowed: set[str], tracked: set[str]) -> list[str]:
-    """One line per file that breaks a rule, sorted."""
+    """One line per archive member that breaks a rule, sorted.
+
+    Every member must sit under the single distribution folder, and every
+    member that is not a folder must be a regular file.
+    """
     found = []
-    for path in archive_files(archive):
-        if path.split("/")[0] not in allowed:
+    roots = set()
+    with tarfile.open(archive) as tar:
+        members = tar.getmembers()
+    for member in members:
+        root, _, path = member.name.partition("/")
+        roots.add(root)
+        if member.isdir():
+            continue
+        if not path:
+            found.append(f"{member.name}: outside the distribution folder")
+        elif not member.isreg():
+            found.append(f"{path}: not a regular file")
+        elif path.split("/")[0] not in allowed:
             found.append(f"{path}: not in the declared list")
         elif path not in tracked and path not in GENERATED:
             found.append(f"{path}: not tracked by Git")
-    return found
+    if len(roots) > 1:
+        found.append(f"more than one top-level folder: {', '.join(sorted(roots))}")
+    return sorted(found)
 
 
 def main(argv: list[str]) -> int:
