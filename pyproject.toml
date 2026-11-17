@@ -45,7 +45,8 @@ packages = ["kionga"]
 [tool.hatch.build.targets.sdist]
 # Ship an explicit list. Without one, hatchling packs every file in the working
 # tree that .gitignore does not exclude, tracked or not, including CI and
-# release configuration. scripts/check_sdist.py enforces this list in CI.
+# release configuration. scripts/check_sdist.py enforces this list in CI and
+# also rejects any packed file that Git does not track.
 only-include = [
     "kionga",
     "tests",

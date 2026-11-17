@@ -1,11 +1,17 @@
-"""Fail if a source distribution contains anything outside the declared list.
+"""Fail if a source distribution contains anything that should not ship.
 
     python scripts/check_sdist.py dist/kionga-*.tar.gz
 
-The allowed top-level entries are `only-include` from pyproject.toml plus the
-files the build backend always adds. Run in CI after `python -m build`, so a
-file that is not meant to ship cannot reach a release.
+Two rules, both checked for every file in the archive:
+
+1. Its top-level entry is in `only-include` from pyproject.toml, or is one of
+   the files the build backend always adds.
+2. The file is tracked by Git. A file that exists only in a working tree is
+   never part of a release, even inside an included folder.
+
+Run in CI after `python -m build`, before the archive is uploaded.
 """
+import subprocess
 import sys
 import tarfile
 import tomllib
@@ -14,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 # Added by hatchling whatever the include list says.
 ALWAYS = {"PKG-INFO", "pyproject.toml", "README.md", "LICENCE", ".gitignore"}
+# Written by the build backend; not a file in the repository.
+GENERATED = {"PKG-INFO"}
 
 
 def allowed_entries(pyproject: Path = ROOT / "pyproject.toml") -> set[str]:
@@ -22,27 +30,42 @@ def allowed_entries(pyproject: Path = ROOT / "pyproject.toml") -> set[str]:
     return ALWAYS | {entry.strip("/").split("/")[0] for entry in sdist["only-include"]}
 
 
-def unexpected_entries(archive: Path, allowed: set[str]) -> list[str]:
-    """Top-level entries of the archive that are not allowed, sorted."""
-    found = set()
+def tracked_files(root: Path = ROOT) -> set[str]:
+    """Every path Git tracks, relative to the repository root."""
+    listing = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                             check=True, capture_output=True, text=True).stdout
+    return {path for path in listing.split("\0") if path}
+
+
+def archive_files(archive: Path) -> list[str]:
+    """Paths of the regular files in the archive, without the leading folder."""
     with tarfile.open(archive) as tar:
-        for name in tar.getnames():
-            parts = name.split("/")
-            if len(parts) > 1 and parts[1]:
-                found.add(parts[1])
-    return sorted(found - allowed)
+        names = [member.name.split("/", 1) for member in tar.getmembers() if not member.isdir()]
+    return sorted(parts[1] for parts in names if len(parts) == 2 and parts[1])
+
+
+def problems(archive: Path, allowed: set[str], tracked: set[str]) -> list[str]:
+    """One line per file that breaks a rule, sorted."""
+    found = []
+    for path in archive_files(archive):
+        if path.split("/")[0] not in allowed:
+            found.append(f"{path}: not in the declared list")
+        elif path not in tracked and path not in GENERATED:
+            found.append(f"{path}: not tracked by Git")
+    return found
 
 
 def main(argv: list[str]) -> int:
     if not argv:
         print("usage: check_sdist.py SDIST [SDIST ...]", file=sys.stderr)
         return 2
-    allowed = allowed_entries()
+    allowed, tracked = allowed_entries(), tracked_files()
     status = 0
     for name in argv:
-        extra = unexpected_entries(Path(name), allowed)
-        if extra:
-            print(f"{name}: not in the declared list: {', '.join(extra)}", file=sys.stderr)
+        found = problems(Path(name), allowed, tracked)
+        for line in found:
+            print(f"{name}: {line}", file=sys.stderr)
+        if found:
             status = 1
         else:
             print(f"{name}: ok")
