@@ -184,8 +184,8 @@ class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
         return [Model.model_validate(item) for item in self._page("/api/v1/models")]
 
     def search_huggingface_models(self, search: str = "", *, task: str = "") -> list[dict]:
-        return self._request("GET", "/api/v1/models/huggingface",
-                             params={"search": search, "task": task})["items"]
+        return (self._request("GET", "/api/v1/models/huggingface",
+                             params={"search": search, "task": task}))["items"]
 
     def import_huggingface_model(
         self, project_id: str, repo_id: str, *, revision: str = "main"
@@ -402,10 +402,10 @@ class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
     def search_knowledge_base(
         self, base_id: str, vector: list[float], *, limit: int = 5
     ) -> list[dict]:
-        return self._request(
+        return (self._request(
             "POST", f"/api/v1/knowledge-bases/{quote(base_id, safe='')}/search",
             json={"vector": vector, "limit": limit},
-        )["items"]
+        ))["items"]
 
     def list_agent_api_connections(self) -> list[dict]:
         """Return approved operations without upstream URLs or credentials."""
@@ -606,7 +606,7 @@ class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
     def list_agent_approvals(self, *, status: str = "pending", project_id: str = "", run_id: str = "") -> list[dict]:
         """Approval requests from approval nodes, newest first."""
         params = {key: value for key, value in {"status": status, "project_id": project_id, "run_id": run_id}.items() if value}
-        return self._request("GET", "/api/v1/agent-approvals", params=params)["items"]
+        return (self._request("GET", "/api/v1/agent-approvals", params=params))["items"]
 
     def decide_agent_approval(self, approval_id: str, decision: str, *, comment: str = "") -> dict:
         """Approve or reject a pending request (``decision``: approve | reject)."""
@@ -624,7 +624,7 @@ class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
 
     def list_project_agent_versions(self, project_id: str = "") -> list[dict]:
         """Published versions usable by subflow, map and loop nodes."""
-        return self._request("GET", "/api/v1/agent-versions", params={"project_id": project_id} if project_id else None)["items"]
+        return (self._request("GET", "/api/v1/agent-versions", params={"project_id": project_id} if project_id else None))["items"]
 
     def agent_operations(self, agent_id: str, *, hours: int = 24) -> dict:
         """KPIs, 24-bucket series, percentiles, rollout timeline and sibling deployments for one agent."""
@@ -654,7 +654,7 @@ class KiongaClient(TeamsAPI, DataAPI, StreamingAPI):
         return [AuditEvent.model_validate(item) for item in self._page("/api/v1/audit")]
 
     def _page(self, path: str) -> list[dict]:
-        return self._request("GET", path)["items"]
+        return (self._request("GET", path))["items"]
 
     def _request(self, method: str, path: str, **kwargs: object):
         response = self._send(method, path, **kwargs)

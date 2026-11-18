@@ -59,7 +59,7 @@ class DataAPI:
     # Platform object storage
 
     async def list_buckets(self) -> list[Any]:
-        return await self._request("GET", "/api/v1/storage/buckets").get("buckets") or []
+        return (await self._request("GET", "/api/v1/storage/buckets")).get("buckets") or []
 
     async def list_storage_objects(self, bucket: str, *, prefix: str = "") -> dict[str, Any]:
         """``objects`` directly under ``prefix`` and the ``prefixes`` below it, like a folder."""

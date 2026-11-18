@@ -59,7 +59,7 @@ class DataAPI:
     # Platform object storage
 
     def list_buckets(self) -> list[Any]:
-        return self._request("GET", "/api/v1/storage/buckets").get("buckets") or []
+        return (self._request("GET", "/api/v1/storage/buckets")).get("buckets") or []
 
     def list_storage_objects(self, bucket: str, *, prefix: str = "") -> dict[str, Any]:
         """``objects`` directly under ``prefix`` and the ``prefixes`` below it, like a folder."""
