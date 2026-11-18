@@ -151,3 +151,13 @@ def test_an_empty_success_body_returns_none():
     handler, _ = scripted(httpx.Response(200))
     with client(handler) as c:
         assert c._request("DELETE", "/api/v1/x") is None
+
+
+@pytest.mark.parametrize("status, base", [(409, ConflictError), (503, ServerError)])
+def test_not_configured_is_its_own_error_and_still_the_status_class(status, base):
+    handler, seen = scripted(error(status, "not_configured", "OPENFAAS_URL is not configured"))
+    with client(handler) as c, pytest.raises(kionga.NotConfiguredError) as caught:
+        c.health()
+    assert isinstance(caught.value, base), "existing handlers for the status still catch it"
+    assert caught.value.message == "OPENFAAS_URL is not configured"
+    assert len(seen) == 1, "a configuration answer doesn't change on a retry"

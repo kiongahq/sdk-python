@@ -1,0 +1,205 @@
+# Async source of truth. kionga/_sync is generated from this by scripts/unasync.py.
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import Any
+
+from ..applications import (
+    Application,
+    ApplicationEvent,
+    ApplicationFailed,
+    ApplicationLogLine,
+    ApplicationsNotConfiguredError,
+    ApplicationTimeout,
+    GitSource,
+    Scaling,
+    application_body,
+    failure_reason,
+)
+from ..data import _items, _name, _rfc3339
+from ..errors import NotConfiguredError
+from ..sse import StreamError
+
+__all__ = ["ApplicationsAPI"]
+
+BASE = "/api/v1/applications"
+
+
+class ApplicationsAPI:
+    """Application methods. Needs ``_request``, ``_send``, ``_stream`` and ``_sleep`` from the client.
+
+    Every method raises ``ApplicationsNotConfiguredError`` on an install without
+    applications (Compose, or Kubernetes without them enabled).
+    """
+
+    _request: Any
+    _send: Any
+    _stream: Any
+    _sleep: Any
+
+    async def create_application(
+        self,
+        project_id: str,
+        name: str,
+        *,
+        image: str | None = None,
+        source: GitSource | dict[str, Any] | None = None,
+        port: int = 8080,
+        env: dict[str, str] | None = None,
+        secret_refs: list[str] | None = None,
+        cpu: str | None = None,
+        memory: str | None = None,
+        min_replicas: int = 1,
+        max_replicas: int | None = None,
+        scaling: Scaling | dict[str, Any] | None = None,
+        health_path: str = "/",
+        visibility: str = "sso",
+    ) -> Application:
+        """Deploy a service from ``image``, or from ``source`` (a Git repository Kionga builds).
+
+        It is served at ``https://<name>.<install domain>``. ``min_replicas=0`` scales it
+        to zero when idle; ``scaling`` chooses ``requests`` or ``cpu`` as the trigger.
+        ``visibility="sso"`` keeps it behind Kionga sign-in; ``"public"`` opens it.
+        ``secret_refs`` name Kionga secrets exposed to the container as environment.
+        Raises ``ValueError`` for an invalid field before sending anything.
+        """
+        body = application_body(
+            project_id=project_id, name=name, image=image, source=source, port=port, env=env,
+            secret_refs=secret_refs, cpu=cpu, memory=memory, min_replicas=min_replicas,
+            max_replicas=max_replicas, scaling=scaling, health_path=health_path,
+            visibility=visibility,
+        )
+        return Application.model_validate(await self._apps("POST", BASE, json=body))
+
+    async def list_applications(self, project_id: str = "") -> list[Application]:
+        params = {"project_id": project_id} if project_id else None
+        body = await self._apps("GET", BASE, params=params)
+        return [Application.model_validate(item) for item in _items(body)]
+
+    async def get_application(self, application_id: str) -> Application:
+        return Application.model_validate(await self._apps("GET", f"{BASE}/{_name(application_id)}"))
+
+    async def update_application(
+        self,
+        application_id: str,
+        *,
+        image: str | None = None,
+        source: GitSource | dict[str, Any] | None = None,
+        port: int | None = None,
+        env: dict[str, str] | None = None,
+        secret_refs: list[str] | None = None,
+        cpu: str | None = None,
+        memory: str | None = None,
+        min_replicas: int | None = None,
+        max_replicas: int | None = None,
+        scaling: Scaling | dict[str, Any] | None = None,
+        health_path: str | None = None,
+        visibility: str | None = None,
+    ) -> Application:
+        """Change only the fields given; the rest stay as they are. Rolls the application."""
+        body = application_body(
+            image=image, source=source, port=port, env=env, secret_refs=secret_refs, cpu=cpu,
+            memory=memory, min_replicas=min_replicas, max_replicas=max_replicas,
+            scaling=scaling, health_path=health_path, visibility=visibility, partial=True,
+        )
+        return Application.model_validate(
+            await self._apps("PATCH", f"{BASE}/{_name(application_id)}", json=body))
+
+    async def delete_application(self, application_id: str) -> None:
+        """Delete the application, its workload and its host name."""
+        await self._apps("DELETE", f"{BASE}/{_name(application_id)}")
+
+    async def redeploy_application(self, application_id: str) -> Application:
+        """Roll the application again: rebuild a Git source, re-pull an image tag."""
+        return Application.model_validate(
+            await self._apps("POST", f"{BASE}/{_name(application_id)}/redeploy", json={}))
+
+    async def application_events(self, application_id: str) -> list[ApplicationEvent]:
+        """Kubernetes events for the application, oldest first."""
+        body = await self._apps("GET", f"{BASE}/{_name(application_id)}/events")
+        return [ApplicationEvent.model_validate(item) for item in _items(body)]
+
+    async def application_logs(self, application_id: str, *, tail: int = 0,
+                         since: datetime | None = None) -> list[ApplicationLogLine]:
+        """Recent log lines from every replica. ``tail`` limits the count per replica."""
+        if tail < 0:
+            raise ValueError("tail can't be negative")
+        params = {k: v for k, v in {"tail": str(tail) if tail else "", "since": _rfc3339(since)}.items() if v}
+        response = await self._apps_send("GET", f"{BASE}/{_name(application_id)}/logs",
+                                   params=params or None)
+        if response.status_code == 204 or not response.content:
+            return []
+        if "json" in response.headers.get("content-type", ""):
+            return [ApplicationLogLine.model_validate(item) for item in _items(response.json())]
+        return [ApplicationLogLine(message=line) for line in response.text.splitlines()]
+
+    async def stream_application_logs(self, application_id: str, *, tail: int = 0) -> AsyncIterator[ApplicationLogLine]:
+        """Yield log lines as they are written, over server-sent events, until you stop
+        iterating. Reconnects from the last line if the connection drops."""
+        params = {"follow": "true", **({"tail": str(tail)} if tail else {})}
+        try:
+            async for message in self._stream(f"{BASE}/{_name(application_id)}/logs/stream", params=params):
+                if message.event == "end":
+                    return
+                if message.event == "error":
+                    raise StreamError(f"application log stream: {message.data}")
+                for item in _log_items(message.data):
+                    yield ApplicationLogLine.model_validate(item)
+        except NotConfiguredError as error:
+            raise ApplicationsNotConfiguredError(error) from None
+
+    async def wait_until_ready(self, application_id: str, *, timeout: float = 600.0,
+                         poll_interval: float = 3.0) -> Application:
+        """Poll until the application is ready, and return it.
+
+        Raises ``ApplicationFailed`` as soon as it fails, with the reason from its
+        status, or from its latest warning event. Raises ``ApplicationTimeout`` when
+        it is still starting after ``timeout`` seconds, with the latest reason known,
+        such as an image that can't be pulled.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            application = await self.get_application(application_id)
+            if application.ready:
+                return application
+            if application.failed:
+                raise ApplicationFailed(application, await self._reason(application))
+            if time.monotonic() >= deadline:
+                raise ApplicationTimeout(application, timeout, await self._reason(application))
+            await self._sleep(poll_interval)
+
+    async def _reason(self, application: Application) -> str:
+        reason = failure_reason(application)
+        if reason:
+            return reason
+        try:
+            events = await self.application_events(application.id)
+        except Exception:  # the reason is a courtesy; never hide the real error with it
+            return ""
+        return failure_reason(application, events)
+
+    async def _apps(self, method: str, path: str, **kwargs: Any) -> Any:
+        try:
+            return await self._request(method, path, **kwargs)
+        except NotConfiguredError as error:
+            raise ApplicationsNotConfiguredError(error) from None
+
+    async def _apps_send(self, method: str, path: str, **kwargs: Any) -> Any:
+        try:
+            return await self._send(method, path, **kwargs)
+        except NotConfiguredError as error:
+            raise ApplicationsNotConfiguredError(error) from None
+
+
+def _log_items(data: str) -> list[Any]:
+    try:
+        value = json.loads(data)
+    except ValueError:
+        return [line for line in data.splitlines() if line]
+    if isinstance(value, dict) and "items" in value:
+        value = value["items"] or []
+    items = value if isinstance(value, list) else [value]
+    return [item if isinstance(item, (dict, str)) else str(item) for item in items]

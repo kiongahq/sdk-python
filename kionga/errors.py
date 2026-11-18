@@ -16,6 +16,7 @@ __all__ = [
     "KiongaConnectionError",
     "KiongaError",
     "KiongaTimeoutError",
+    "NotConfiguredError",
     "NotFoundError",
     "PermissionDeniedError",
     "RateLimitError",
@@ -94,6 +95,23 @@ class ServerError(KiongaAPIError):
     """5xx: the gateway or a service behind it failed."""
 
 
+class NotConfiguredError(KiongaAPIError):
+    """The gateway answered ``not_configured``: this install has not enabled the feature.
+
+    The gateway uses 409 or 503 for it. The error raised also subclasses the class for
+    its status (``ConflictError`` or ``ServerError``), so existing handlers keep
+    catching it. ``message`` carries the gateway's enablement steps.
+    """
+
+
+class _ConflictNotConfigured(NotConfiguredError, ConflictError):
+    pass
+
+
+class _ServerNotConfigured(NotConfiguredError, ServerError):
+    pass
+
+
 _BY_STATUS: dict[int, type[KiongaAPIError]] = {
     400: BadRequestError,
     401: AuthenticationError,
@@ -107,6 +125,12 @@ _BY_STATUS: dict[int, type[KiongaAPIError]] = {
 
 def error_for_response(response: httpx.Response) -> KiongaAPIError:
     """The most specific error class for an error response."""
+    if _error_body(response)[0] == "not_configured":
+        if response.status_code == 409:
+            return _ConflictNotConfigured(response)
+        if response.status_code >= 500:
+            return _ServerNotConfigured(response)
+        return NotConfiguredError(response)
     if response.status_code >= 500:
         return ServerError(response)
     return _BY_STATUS.get(response.status_code, KiongaAPIError)(response)
