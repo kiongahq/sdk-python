@@ -138,22 +138,55 @@ class ApplicationsAPI:
 
     async def stream_application_logs(self, application_id: str, *, tail: int = 0) -> AsyncIterator[ApplicationLogLine]:
         """Yield log lines as they are written, over server-sent events, until you stop
-        iterating. Reconnects from the last line if the connection drops."""
+        iterating.
+
+        If the connection drops it reconnects from the last line's timestamp
+        (``since``), skipping lines it already yielded, or with ``tail=0`` when lines
+        carry no timestamp, so nothing is repeated. Lines written while it was
+        disconnected are lost in that second case.
+        """
+        last: datetime | None = None
+        seen_at_last: set[tuple[str, str, str]] = set()
+
+        def resume() -> dict[str, str]:
+            if last is not None:
+                return {"follow": "true", "since": last.isoformat()}
+            return {"follow": "true", "tail": "0"}
+
         params = {"follow": "true", **({"tail": str(tail)} if tail else {})}
+        path = f"{BASE}/{_name(application_id)}/logs/stream"
         try:
-            async for message in self._stream(f"{BASE}/{_name(application_id)}/logs/stream", params=params):
+            async for message in self._stream(path, params=params, resume=resume):
                 if message.event == "end":
                     return
                 if message.event == "error":
                     raise StreamError(f"application log stream: {message.data}")
                 for item in _log_items(message.data):
-                    yield ApplicationLogLine.model_validate(item)
+                    line = ApplicationLogLine.model_validate(item)
+                    if line.timestamp is not None:
+                        # `since` is inclusive, so a resumed stream repeats the lines
+                        # of the last timestamp; drop those and anything older.
+                        key = (line.pod, line.container, line.message)
+                        if last is not None and _older(line.timestamp, last):
+                            continue
+                        if last is not None and line.timestamp == last:
+                            if key in seen_at_last:
+                                continue
+                        else:
+                            last, seen_at_last = line.timestamp, set()
+                        seen_at_last.add(key)
+                    yield line
         except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError(error) from None
+            raise ApplicationsNotConfiguredError.from_error(error) from None
 
     async def wait_until_ready(self, application_id: str, *, timeout: float = 600.0,
-                         poll_interval: float = 3.0) -> Application:
+                         poll_interval: float = 3.0, generation: int | None = None) -> Application:
         """Poll until the application is ready, and return it.
+
+        After an update or redeploy, pass the ``generation`` of the application it
+        returned, so a status left over from the previous rollout is not taken as
+        ready. ``Application.ready`` already ignores a status whose
+        ``observed_generation`` is behind the application's ``generation``.
 
         Raises ``ApplicationFailed`` as soon as it fails, with the reason from its
         status, or from its latest warning event. Raises ``ApplicationTimeout`` when
@@ -163,7 +196,7 @@ class ApplicationsAPI:
         deadline = time.monotonic() + timeout
         while True:
             application = await self.get_application(application_id)
-            if application.ready:
+            if application.ready and _caught_up(application, generation):
                 return application
             if application.failed:
                 raise ApplicationFailed(application, await self._reason(application))
@@ -185,13 +218,13 @@ class ApplicationsAPI:
         try:
             return await self._request(method, path, **kwargs)
         except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError(error) from None
+            raise ApplicationsNotConfiguredError.from_error(error) from None
 
     async def _apps_send(self, method: str, path: str, **kwargs: Any) -> Any:
         try:
             return await self._send(method, path, **kwargs)
         except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError(error) from None
+            raise ApplicationsNotConfiguredError.from_error(error) from None
 
 
 def _log_items(data: str) -> list[Any]:
@@ -203,3 +236,19 @@ def _log_items(data: str) -> list[Any]:
         value = value["items"] or []
     items = value if isinstance(value, list) else [value]
     return [item if isinstance(item, (dict, str)) else str(item) for item in items]
+
+
+def _caught_up(application: Application, generation: int | None) -> bool:
+    if generation is None:
+        return True
+    observed = application.status.observed_generation
+    if observed is None:
+        observed = application.generation
+    return observed is not None and observed >= generation
+
+
+def _older(value: datetime, than: datetime) -> bool:
+    try:
+        return value < than
+    except TypeError:  # one is timezone-aware and the other isn't: can't order them
+        return False

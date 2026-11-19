@@ -148,7 +148,10 @@ with KiongaClient() as client:
 
 Also `list_applications`, `get_application`, `redeploy_application`,
 `application_events`, `stream_application_logs` (follows new lines over
-server-sent events) and `delete_application`. Invalid fields, such as a name that is
+server-sent events and resumes after a dropped connection without repeating lines)
+and `delete_application`. After `update_application` or `redeploy_application`,
+pass the returned `generation` to `wait_until_ready` so the previous rollout's
+status is not taken as ready. Invalid fields, such as a name that is
 not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError` before
 anything is sent.
 

@@ -209,7 +209,8 @@ def _finish(client: Any, args: argparse.Namespace, application: Application) -> 
     if args.wait:
         if not args.json:
             print(f"Waiting for {application.name} to be ready...", file=sys.stderr)
-        application = client.wait_until_ready(application.id, timeout=args.timeout)
+        application = client.wait_until_ready(application.id, timeout=args.timeout,
+                                               generation=application.generation)
     if args.json:
         _print_json(application.model_dump(mode="json"))
         return

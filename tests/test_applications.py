@@ -349,3 +349,65 @@ async def test_the_async_client_has_the_same_methods():
         with pytest.raises(ApplicationsNotConfiguredError):
             await c.create_application("p-1", "billing", image="i")
     assert len(slept) == 1
+
+
+def test_a_not_configured_409_is_still_a_conflict_for_existing_handlers():
+    c, _ = client({("GET", BASE): ok(NOT_CONFIGURED, 409)})
+    with pytest.raises(ConflictError) as caught:
+        c.list_applications()
+    assert isinstance(caught.value, ApplicationsNotConfiguredError)
+
+
+def test_a_not_configured_503_is_still_a_server_error():
+    c, _ = client({("GET", BASE): ok(NOT_CONFIGURED, 503)})
+    with pytest.raises(kionga.ServerError) as caught:
+        c.list_applications()
+    assert isinstance(caught.value, ApplicationsNotConfiguredError)
+
+
+def test_a_status_from_the_previous_rollout_is_not_ready():
+    stale = Application.model_validate({**with_status(phase="ready", observed_generation=3), "generation": 4})
+    assert not stale.ready
+    current = Application.model_validate({**with_status(phase="ready", observed_generation=4), "generation": 4})
+    assert current.ready
+
+
+def test_wait_after_an_update_skips_the_previous_rollouts_ready_status():
+    c, _ = client({("GET", f"{BASE}/app-1"): [
+        ok(with_status(phase="ready", observed_generation=3)),
+        ok(with_status(phase="ready", observed_generation=4)),
+    ]})
+    app = c.wait_until_ready("app-1", generation=4)
+    assert app.status.observed_generation == 4 and len(c.slept) == 1
+
+
+def stream(text):
+    return httpx.Response(200, text=text, headers={"content-type": "text/event-stream"})
+
+
+def test_a_resumed_log_stream_does_not_repeat_lines():
+    first = (
+        'event: log\ndata: {"pod": "p", "message": "a", "ts": "2026-11-19T00:00:01Z"}\n\n'
+        'event: log\ndata: {"pod": "p", "message": "b", "ts": "2026-11-19T00:00:02Z"}\n\n'
+    )
+    # The gateway replays from `since`, inclusive, after the drop.
+    second = (
+        'event: log\ndata: {"pod": "p", "message": "b", "ts": "2026-11-19T00:00:02Z"}\n\n'
+        'event: log\ndata: {"pod": "p", "message": "c", "ts": "2026-11-19T00:00:02Z"}\n\n'
+        'event: log\ndata: {"pod": "p", "message": "d", "ts": "2026-11-19T00:00:03Z"}\n\n'
+        'event: end\ndata: {}\n\n'
+    )
+    c, gw = client({("GET", f"{BASE}/billing/logs/stream"): [stream(first), stream(second)]})
+    assert [line.message for line in c.stream_application_logs("billing", tail=20)] == ["a", "b", "c", "d"]
+    assert gw.seen[0].url.params["tail"] == "20"
+    resumed = gw.seen[1].url.params
+    assert resumed["since"].startswith("2026-11-19T00:00:02") and "tail" not in resumed
+
+
+def test_a_resumed_log_stream_without_timestamps_asks_for_new_lines_only():
+    c, gw = client({("GET", f"{BASE}/billing/logs/stream"): [
+        stream("event: log\ndata: repeated\n\n"),
+        stream("event: log\ndata: new\n\nevent: end\ndata: {}\n\n"),
+    ]})
+    assert [line.message for line in c.stream_application_logs("billing", tail=5)] == ["repeated", "new"]
+    assert gw.seen[1].url.params["tail"] == "0"

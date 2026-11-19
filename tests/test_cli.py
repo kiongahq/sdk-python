@@ -178,3 +178,12 @@ def test_python_dash_m_runs_the_same_command():
 
 def test_the_console_script_is_declared():
     assert 'kionga = "kionga.cli:main"' in (ROOT / "pyproject.toml").read_text()
+
+
+def test_update_wait_passes_the_new_generation(capsys):
+    stale = {**APP, "generation": 5, "status": {"phase": "ready", "observed_generation": 4}}
+    fresh = {**APP, "generation": 5, "status": {"phase": "ready", "observed_generation": 5}}
+    code, out, _, seen = run(["apps", "update", "billing", "--image", "i:2", "--wait"],
+                             {("PATCH", f"{BASE}/billing"): ok(stale),
+                              ("GET", f"{BASE}/app-1"): [ok(stale), ok(fresh)]}, capsys)
+    assert code == 0 and len(seen) == 3

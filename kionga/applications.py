@@ -20,7 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .errors import NotConfiguredError
+from .errors import ConflictError, NotConfiguredError, ServerError
 from .models import Scaling
 
 __all__ = [
@@ -79,6 +79,7 @@ class ApplicationStatus(_Open):
     phase: str = ""
     url: str = ""
     ready_replicas: int = 0
+    observed_generation: int | None = None
     message: str = ""
     last_build: dict[str, Any] | None = None
     conditions: list[ApplicationCondition] = Field(default_factory=list)
@@ -103,6 +104,7 @@ class Application(_Open):
     scaling: Scaling | None = None
     health_path: str = ""
     visibility: str = ""
+    generation: int | None = None
     status: ApplicationStatus = Field(default_factory=ApplicationStatus)
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -120,7 +122,8 @@ class Application(_Open):
             status = {"phase": status}
         elif not isinstance(status, dict):
             status = {}
-        for key in ("phase", "url", "ready_replicas", "message", "last_build", "conditions"):
+        for key in ("phase", "url", "ready_replicas", "observed_generation", "message", "last_build",
+                    "conditions"):
             if key in value and key not in status:
                 status[key] = value[key]
         value["status"] = status
@@ -140,9 +143,19 @@ class Application(_Open):
         return self.status.url
 
     @property
+    def rolled_out(self) -> bool:
+        """False while the operator has not yet acted on the latest spec, when the
+        gateway reports ``generation`` and ``status.observed_generation``."""
+        observed = self.status.observed_generation
+        return self.generation is None or observed is None or observed >= self.generation
+
+    @property
     def ready(self) -> bool:
-        """True when the application serves requests. A scaled-to-zero application is
-        ready with no running replicas: the first request starts one."""
+        """True when the latest spec serves requests. A scaled-to-zero application is
+        ready with no running replicas: the first request starts one. A status left
+        over from the previous rollout does not count (see ``rolled_out``)."""
+        if not self.rolled_out:
+            return False
         if self.status.phase.lower() in READY_PHASES:
             return True
         return any(c.type == "Ready" and c.status == "True" for c in self.status.conditions)
@@ -201,13 +214,33 @@ class ApplicationLogLine(_Open):
 
 
 class ApplicationsNotConfiguredError(NotConfiguredError):
-    """This install can't run applications: they need Kionga on Kubernetes."""
+    """This install can't run applications: they need Kionga on Kubernetes.
 
-    def __init__(self, error: NotConfiguredError) -> None:
-        super().__init__(error.response)
+    Like ``NotConfiguredError``, the error raised is also the class for its status
+    (``ConflictError`` for the gateway's 409). Build one with ``from_error``.
+    """
+
+    def __init__(self, response: Any) -> None:
+        super().__init__(response)
         gateway = f" Gateway: {self.message}" if self.message else ""
         self.args = (f"{ENABLE_HINT}{gateway}",)
         self.hint = ENABLE_HINT
+
+    @staticmethod
+    def from_error(error: NotConfiguredError) -> ApplicationsNotConfiguredError:
+        if isinstance(error, ConflictError):
+            return _ConflictApplicationsNotConfigured(error.response)
+        if isinstance(error, ServerError):
+            return _ServerApplicationsNotConfigured(error.response)
+        return ApplicationsNotConfiguredError(error.response)
+
+
+class _ConflictApplicationsNotConfigured(ApplicationsNotConfiguredError, ConflictError):
+    pass
+
+
+class _ServerApplicationsNotConfigured(ApplicationsNotConfiguredError, ServerError):
+    pass
 
 
 class ApplicationFailed(Exception):
