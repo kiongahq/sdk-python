@@ -1,5 +1,16 @@
 """Typed notebook and automation entry point for the Kionga platform."""
 
+from .applications import (
+    Application,
+    ApplicationCondition,
+    ApplicationEvent,
+    ApplicationFailed,
+    ApplicationLogLine,
+    ApplicationStatus,
+    ApplicationTimeout,
+    ApplicationsNotConfiguredError,
+    GitSource,
+)
 from .client import AsyncKiongaClient, KiongaClient
 from .errors import (
     AuthenticationError,
@@ -9,6 +20,7 @@ from .errors import (
     KiongaConnectionError,
     KiongaError,
     KiongaTimeoutError,
+    NotConfiguredError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -31,15 +43,31 @@ from .models import (
     Function,
     GitRepository,
     Model,
+    ModelDeploymentFailed,
+    ModelDeploymentTimeout,
     PipelineRun,
     PipelineDefinition,
     Project,
     ProjectTemplate,
     Readiness,
+    Scaling,
     Tool,
 )
 
 __all__ = [
+    "Application",
+    "ApplicationCondition",
+    "ApplicationEvent",
+    "ApplicationFailed",
+    "ApplicationLogLine",
+    "ApplicationStatus",
+    "ApplicationTimeout",
+    "ApplicationsNotConfiguredError",
+    "GitSource",
+    "ModelDeploymentFailed",
+    "ModelDeploymentTimeout",
+    "NotConfiguredError",
+    "Scaling",
     "AsyncKiongaClient",
     "StreamError",
     "FeatureMaterialization",

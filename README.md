@@ -71,7 +71,9 @@ the SDK logs a warning each time.
 
 Every error response raises a subclass of `KiongaAPIError`, such as `NotFoundError`,
 `ConflictError` or `RateLimitError`, with the gateway's `code`, `message` and
-`request_id`. These still subclass `httpx.HTTPStatusError`. If the gateway can't be
+`request_id`. These still subclass `httpx.HTTPStatusError`. A feature this install
+has not enabled raises `NotConfiguredError`, which is also the error class for its
+status, and is not retried. If the gateway can't be
 reached, the client raises `KiongaConnectionError`, or `KiongaTimeoutError` for a
 timeout.
 
@@ -112,6 +114,81 @@ credential a Kionga notebook uses and an agent run's credential, with
 
 `stream_team_run_events(run.id)` follows the same events over server-sent events
 instead of polling, and ends with the run.
+
+### Applications
+
+Applications are your own services, run by Kionga as Kubernetes workloads and
+served at `https://<name>.<install domain>`. They need a Kubernetes install: on a
+Compose install every applications call raises `ApplicationsNotConfiguredError`,
+which says so and carries the gateway's enablement steps.
+
+```python
+from kionga import ApplicationFailed, ApplicationTimeout, KiongaClient
+
+with KiongaClient() as client:
+    app = client.create_application(
+        project_id, "billing",
+        image="ghcr.io/acme/billing:1.4",        # or source={"git": url, "ref": "main"}
+        port=8080, env={"MODE": "prod"}, secret_refs=["billing-db"],
+        min_replicas=0, max_replicas=4,            # 0 scales to zero when idle
+        scaling={"metric": "requests", "target": 20},
+        health_path="/healthz", visibility="sso",  # "public" skips Kionga sign-in
+    )
+    try:
+        app = client.wait_until_ready(app.id, timeout=600)
+        print(app.url)
+    except ApplicationFailed as error:              # failed: reason from status or events
+        print(error.reason)
+    except ApplicationTimeout as error:             # still starting: last known reason
+        print(error.application.phase, error.reason)
+    client.update_application(app.id, image="ghcr.io/acme/billing:1.5")
+    for line in client.application_logs(app.id, tail=100):
+        print(line.pod, line.message)
+```
+
+Also `list_applications`, `get_application`, `redeploy_application`,
+`application_events`, `stream_application_logs` (follows new lines over
+server-sent events and resumes after a dropped connection without repeating lines)
+and `delete_application`. After `update_application` or `redeploy_application`,
+pass the returned `generation` to `wait_until_ready` so the previous rollout's
+status is not taken as ready. Invalid fields, such as a name that is
+not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError` before
+anything is sent.
+
+The `kionga` command does the same from a terminal (`python -m kionga` works too):
+
+```bash
+kionga apps deploy billing --project "$PROJECT" --image ghcr.io/acme/billing:1.4 \
+  --env MODE=prod --secret billing-db --min-replicas 0 --max-replicas 4 \
+  --scale-on requests --target 20 --health-path /healthz --wait
+kionga apps list
+kionga apps get billing --json
+kionga apps logs billing --follow
+kionga apps events billing
+kionga apps update billing --image ghcr.io/acme/billing:1.5 --wait
+kionga apps redeploy billing --wait
+kionga apps delete billing --yes
+```
+
+Errors print as `kionga: <reason>` and exit with status 1.
+
+### Model and agent deployments
+
+`deploy_model(model_id, canary_weight=10)` returns as soon as the deployment is
+recorded. `deployment_status` is `pending` until the model server is up, then
+`serving` with `endpoint_url`, or `failed`. `wait_for_model_deployment` waits for
+that outcome and raises `ModelDeploymentFailed` (with `reason`) or
+`ModelDeploymentTimeout`:
+
+```python
+model = client.deploy_model(model_id, canary_weight=10)
+model = client.wait_for_model_deployment(model.id, timeout=600)
+print(model.endpoint_url, model.canary_weight)
+```
+
+`deploy_agent` and `deploy_agent_version` take `scaling={"metric": "requests",
+"target": 10}` or `{"metric": "cpu", "target": 70}` to choose what drives
+autoscaling; `Agent.scaling` reports it.
 
 ### Async
 

@@ -16,6 +16,9 @@ from ..models import (
     Connection,
     Function,
     Model,
+    ModelDeploymentFailed,
+    ModelDeploymentTimeout,
+    Scaling,
     PipelineRun,
     PipelineDefinition,
     Project,
@@ -25,6 +28,7 @@ from ..models import (
 )
 from ..errors import KiongaConnectionError, KiongaTimeoutError, error_for_response
 from ..retry import RetryPolicy
+from .applications import ApplicationsAPI
 from .data import DataAPI
 from .sse import StreamingAPI
 from .teams import TeamsAPI
@@ -33,7 +37,7 @@ from ..transport import require_token_transport
 __all__ = ["AsyncKiongaClient"]
 
 
-class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
+class AsyncKiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
     """Typed client used from notebooks, training jobs, and automation."""
 
     def __init__(
@@ -185,8 +189,8 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
         return [Model.model_validate(item) for item in await self._page("/api/v1/models")]
 
     async def search_huggingface_models(self, search: str = "", *, task: str = "") -> list[dict]:
-        return await self._request("GET", "/api/v1/models/huggingface",
-                             params={"search": search, "task": task})["items"]
+        return (await self._request("GET", "/api/v1/models/huggingface",
+                             params={"search": search, "task": task}))["items"]
 
     async def import_huggingface_model(
         self, project_id: str, repo_id: str, *, revision: str = "main"
@@ -226,14 +230,49 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
             await self._request("POST", f"/api/v1/models/{model_id}/promote", json={"stage": stage})
         )
 
+    async def get_model(self, model_id: str) -> Model:
+        """One registered model with its deployment status, endpoint and canary weight."""
+        for model in await self.list_models():
+            if model.id == model_id:
+                return model
+        raise LookupError(f"model {model_id} not found")
+
     async def deploy_model(self, model_id: str, *, canary_weight: int = 0) -> Model:
+        """Start serving the model. ``canary_weight`` (0 to 100) is the percent of
+        traffic it takes from the version already serving; 0 replaces it.
+
+        The gateway answers once the deployment is recorded: ``deployment_status``
+        is ``pending`` until the server is up, then ``serving`` with ``endpoint_url``,
+        or ``failed``. Use ``wait_for_model_deployment`` to wait for the outcome.
+        """
+        if not 0 <= canary_weight <= 100:
+            raise ValueError("canary_weight must be 0 to 100")
         return Model.model_validate(
             await self._request(
                 "POST",
-                f"/api/v1/models/{model_id}/deploy",
+                f"/api/v1/models/{quote(model_id, safe='')}/deploy",
                 json={"canary_weight": canary_weight},
             )
         )
+
+    async def wait_for_model_deployment(self, model_id: str, *, timeout: float = 600.0,
+                                  poll_interval: float = 3.0) -> Model:
+        """Poll until the model is serving, and return it with its ``endpoint_url``.
+
+        Raises ``ModelDeploymentFailed`` with the gateway's reason when the deploy
+        fails, and ``ModelDeploymentTimeout`` when it is still pending after
+        ``timeout`` seconds.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            model = await self.get_model(model_id)
+            if model.serving:
+                return model
+            if model.deployment_failed:
+                raise ModelDeploymentFailed(model, model.deployment_reason)
+            if time.monotonic() >= deadline:
+                raise ModelDeploymentTimeout(model, timeout)
+            await self._sleep(poll_interval)
 
     async def rollback_model(self, model_id: str) -> Model:
         return Model.model_validate(
@@ -259,7 +298,15 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
         gpu: int = 0,
         gpu_type: str = "nvidia.com/gpu",
         tools: list[str] | None = None,
+        scaling: Scaling | dict | None = None,
     ) -> Agent:
+        """Deploy an agent on the managed runtime.
+
+        ``scaling`` chooses what drives autoscaling between ``replicas`` and
+        ``max_replicas``: ``{"metric": "requests", "target": 10}`` (in-flight
+        requests per replica) or ``{"metric": "cpu", "target": 70}`` (percent of
+        the CPU request). Without it the gateway picks its default.
+        """
         data = await self._request(
             "POST",
             "/api/v1/agents",
@@ -282,6 +329,7 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
                     "gpu_type": gpu_type if gpu else "",
                 },
                 "tools": tools or [],
+                **_scaling(scaling),
             },
         )
         return Agent.model_validate(data)
@@ -403,10 +451,10 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
     async def search_knowledge_base(
         self, base_id: str, vector: list[float], *, limit: int = 5
     ) -> list[dict]:
-        return await self._request(
+        return (await self._request(
             "POST", f"/api/v1/knowledge-bases/{quote(base_id, safe='')}/search",
             json={"vector": vector, "limit": limit},
-        )["items"]
+        ))["items"]
 
     async def list_agent_api_connections(self) -> list[dict]:
         """Return approved operations without upstream URLs or credentials."""
@@ -595,19 +643,21 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
 
     async def deploy_agent_version(
         self, version_id: str, *, min_replicas: int = 1, max_replicas: int = 1, cpu: str = "500m",
-        memory: str = "1Gi", require_evaluation: bool = False,
+        memory: str = "1Gi", require_evaluation: bool = False, scaling: Scaling | dict | None = None,
     ) -> dict:
-        """Deploy (or roll back to) a published version on the managed agent runtime."""
+        """Deploy (or roll back to) a published version on the managed agent runtime.
+        ``scaling`` is as for ``deploy_agent``."""
         return await self._request(
             "POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/deploy",
             json={"autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
-                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation},
+                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation,
+                  **_scaling(scaling)},
         )
 
     async def list_agent_approvals(self, *, status: str = "pending", project_id: str = "", run_id: str = "") -> list[dict]:
         """Approval requests from approval nodes, newest first."""
         params = {key: value for key, value in {"status": status, "project_id": project_id, "run_id": run_id}.items() if value}
-        return await self._request("GET", "/api/v1/agent-approvals", params=params)["items"]
+        return (await self._request("GET", "/api/v1/agent-approvals", params=params))["items"]
 
     async def decide_agent_approval(self, approval_id: str, decision: str, *, comment: str = "") -> dict:
         """Approve or reject a pending request (``decision``: approve | reject)."""
@@ -625,7 +675,7 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
 
     async def list_project_agent_versions(self, project_id: str = "") -> list[dict]:
         """Published versions usable by subflow, map and loop nodes."""
-        return await self._request("GET", "/api/v1/agent-versions", params={"project_id": project_id} if project_id else None)["items"]
+        return (await self._request("GET", "/api/v1/agent-versions", params={"project_id": project_id} if project_id else None))["items"]
 
     async def agent_operations(self, agent_id: str, *, hours: int = 24) -> dict:
         """KPIs, 24-bucket series, percentiles, rollout timeline and sibling deployments for one agent."""
@@ -655,7 +705,7 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
         return [AuditEvent.model_validate(item) for item in await self._page("/api/v1/audit")]
 
     async def _page(self, path: str) -> list[dict]:
-        return await self._request("GET", path)["items"]
+        return (await self._request("GET", path))["items"]
 
     async def _request(self, method: str, path: str, **kwargs: object):
         response = await self._send(method, path, **kwargs)
@@ -686,3 +736,10 @@ class AsyncKiongaClient(TeamsAPI, DataAPI, StreamingAPI):
                 continue
             await response.aread()
             raise error_for_response(response)
+
+
+def _scaling(scaling: Scaling | dict | None) -> dict:
+    if scaling is None:
+        return {}
+    rule = scaling if isinstance(scaling, Scaling) else Scaling.model_validate(scaling)
+    return {"scaling": {"metric": rule.metric, "target": rule.target}}

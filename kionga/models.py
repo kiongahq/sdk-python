@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class GitRepository(BaseModel):
@@ -99,7 +101,27 @@ class Function(BaseModel):
     updated_at: datetime | None = None
 
 
+class Scaling(BaseModel):
+    """What drives autoscaling: ``requests`` (in-flight requests per replica, which
+    allows scale to zero) or ``cpu`` (percent of the CPU request)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    metric: Literal["requests", "cpu"]
+    target: int = Field(gt=0)
+
+
+# Deployment statuses. "serving" and "failed" are final for a deploy; the
+# others mean the deploy is still in progress. Older gateways report
+# "deploying" before "serving".
+MODEL_SERVING = frozenset({"serving"})
+MODEL_DEPLOY_FAILED = frozenset({"failed"})
+
+
 class Model(BaseModel):
+    # Keep fields the SDK doesn't model yet, such as a deployment reason.
+    model_config = ConfigDict(extra="allow")
+
     source: dict[str, str] | None = None
     id: str
     project_id: str
@@ -115,6 +137,24 @@ class Model(BaseModel):
     canary_weight: int = 0
     endpoint_url: str | None = None
     previous_stage: str | None = None
+    deployment_message: str = ""
+
+    @property
+    def serving(self) -> bool:
+        """True when the deployment answers predictions at ``endpoint_url``."""
+        return self.deployment_status in MODEL_SERVING
+
+    @property
+    def deployment_failed(self) -> bool:
+        return self.deployment_status in MODEL_DEPLOY_FAILED
+
+    @property
+    def deployment_reason(self) -> str:
+        """Why the deployment failed or is waiting, when the gateway says."""
+        if self.deployment_message:
+            return self.deployment_message
+        extra = self.model_extra or {}
+        return next((str(extra[key]) for key in ("deployment_error", "message", "error") if extra.get(key)), "")
 
 
 class AgentAutoscaling(BaseModel):
@@ -142,6 +182,7 @@ class Agent(BaseModel):
     endpoint_url: str | None = None
     replicas: int
     autoscaling: AgentAutoscaling = Field(default_factory=AgentAutoscaling)
+    scaling: Scaling | None = None
     resources: AgentResources = Field(default_factory=AgentResources)
     canary_weight: int
     tools: list[str]
@@ -219,3 +260,23 @@ class AuditEvent(BaseModel):
     actor: str
     metadata: dict | None = None
     created_at: datetime
+
+
+class ModelDeploymentFailed(Exception):
+    """The model deployment failed. ``model`` is its last state and ``reason`` why."""
+
+    def __init__(self, model: Model, reason: str = "") -> None:
+        super().__init__(f"model {model.name} {model.version} failed to deploy: {reason or 'no reason given'}")
+        self.model = model
+        self.reason = reason
+
+
+class ModelDeploymentTimeout(TimeoutError):
+    """The model was not serving when ``wait_for_model_deployment`` gave up."""
+
+    def __init__(self, model: Model, timeout: float) -> None:
+        reason = model.deployment_reason
+        text = f"model {model.name} {model.version} still {model.deployment_status or 'pending'} after {timeout:g}s"
+        super().__init__(f"{text}: {reason}" if reason else text)
+        self.model = model
+        self.reason = reason

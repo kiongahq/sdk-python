@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from .errors import retry_after_seconds
+from .errors import _error_body, retry_after_seconds
 
 __all__ = ["RetryPolicy"]
 
@@ -43,6 +43,8 @@ class RetryPolicy:
     def should_retry_status(self, request: httpx.Request, response: httpx.Response) -> bool:
         if response.status_code not in self.statuses:
             return False
+        if response.status_code != 429 and _not_configured(response):
+            return False  # a configuration answer doesn't change on a retry
         return response.status_code == 429 or self.safe_to_repeat(request)
 
     def should_retry_error(self, request: httpx.Request, error: httpx.TransportError) -> bool:
@@ -57,3 +59,10 @@ class RetryPolicy:
                 return min(hinted, self.max_backoff)
         ceiling = min(self.max_backoff, self.backoff * 2 ** (attempt - 1))
         return random.uniform(ceiling / 2, ceiling)  # jitter spreads clients apart
+
+
+def _not_configured(response: httpx.Response) -> bool:
+    try:
+        return _error_body(response)[0] == "not_configured"
+    except httpx.ResponseNotRead:  # a stream whose body hasn't been read yet
+        return False
