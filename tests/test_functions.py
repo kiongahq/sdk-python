@@ -58,7 +58,7 @@ def test_one_bound_takes_the_gateway_default_for_the_other(given, sent):
     ({"scaling": {"metric": "cpu", "target": 70}}, "at least one replica"),
     ({"scaling": {"metric": "cpu", "target": 70}, "min_replicas": 0, "max_replicas": 3}, "at least one replica"),
     ({"scaling": {"metric": "memory", "target": 5}}, "metric"),
-    ({"scaling": {"metric": "requests", "target": 0}}, "1 to 10000"),
+    ({"scaling": {"metric": "requests", "target": -5}}, "1 to 10000"),
 ])
 def test_invalid_bounds_and_scaling_are_rejected_before_sending(fields, message):
     c, seen = client()
@@ -70,3 +70,13 @@ def test_invalid_bounds_and_scaling_are_rejected_before_sending(fields, message)
 def test_functions_from_older_gateways_still_parse():
     fn = kionga.Function.model_validate({"name": "f", "image": "i", "status": "deployed"})
     assert fn.replica_range is None and fn.scaling is None and fn.message == ""
+
+
+@pytest.mark.parametrize("scaling, sent", [
+    ({"metric": "requests"}, {"metric": "requests"}),
+    ({"metric": "cpu", "target": 0}, {"metric": "cpu"}),
+])
+def test_a_scaling_rule_without_a_target_takes_the_gateway_default(scaling, sent):
+    c, seen = client()
+    c.deploy_function("p-1", "resize", "i", min_replicas=1, scaling=scaling)
+    assert json.loads(seen[0].content)["scaling"] == sent

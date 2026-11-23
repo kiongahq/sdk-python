@@ -107,12 +107,18 @@ class Scaling(BaseModel):
 
 
 def scaling_body(scaling: Scaling | dict | None) -> dict:
-    """``{"scaling": {...}}`` for a request, or ``{}``. Raises ``ValueError``."""
+    """``{"scaling": {...}}`` for a request, or ``{}``. Raises ``ValueError``.
+
+    A target left out (or 0) takes the gateway's default for the metric: 100
+    concurrent requests per replica, or 80% CPU.
+    """
     if scaling is None:
         return {}
     rule = scaling if isinstance(scaling, Scaling) else Scaling.model_validate(scaling)
     if rule.metric not in SCALING_TARGETS:
         raise ValueError(f"scaling metric must be one of {list(SCALING_METRICS)}")
+    if rule.target == 0:
+        return {"scaling": {"metric": rule.metric}}
     low, high = SCALING_TARGETS[rule.metric]
     if not low <= rule.target <= high:
         raise ValueError(f"scaling target for {rule.metric} must be {low} to {high}")

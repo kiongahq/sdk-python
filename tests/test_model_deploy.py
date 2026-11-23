@@ -133,7 +133,7 @@ def test_deploy_agent_sends_scaling_only_when_given():
 
 
 @pytest.mark.parametrize("scaling", [
-    {"metric": "gpu", "target": 5}, {"metric": "cpu", "target": 0}, {"metric": "cpu", "target": 101},
+    {"metric": "gpu", "target": 5}, {"metric": "cpu", "target": -1}, {"metric": "cpu", "target": 101},
     {"metric": "requests", "target": 10001},
 ])
 def test_agent_scaling_is_validated(scaling):

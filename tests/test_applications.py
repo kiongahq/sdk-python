@@ -123,7 +123,7 @@ def test_one_replica_bound_fills_the_other_because_the_gateway_needs_both(given,
     ({"max_replicas": 101}, "1 to 100"),
     ({"min_replicas": 3, "max_replicas": 2}, "at least min_replicas"),
     ({"scaling": {"metric": "memory", "target": 5}}, "metric"),
-    ({"scaling": {"metric": "cpu", "target": 0}}, "1 to 100"),
+    ({"scaling": {"metric": "cpu", "target": -1}}, "1 to 100"),
     ({"scaling": {"metric": "cpu", "target": 101}}, "1 to 100"),
     ({"scaling": {"metric": "requests", "target": 10001}}, "1 to 10000"),
     ({"scaling": {"metric": "cpu", "target": 70}, "min_replicas": 0}, "scale to zero needs the requests"),
@@ -423,3 +423,9 @@ async def test_the_async_client_has_the_same_methods():
         with pytest.raises(ApplicationsNotConfiguredError):
             await c.create_application("p-1", "billing", image="i")
     assert len(slept) == 1
+
+
+def test_a_scaling_rule_without_a_target_takes_the_gateway_default():
+    c, gw = client({("POST", BASE): ok(APP, 201)})
+    c.create_application("p-1", "billing", image="i", scaling={"metric": "requests"})
+    assert gw.body()["scaling"] == {"metric": "requests"}
