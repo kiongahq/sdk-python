@@ -291,28 +291,36 @@ def rewind(stamp: str) -> str:
 class LogCursor:
     """Decides which lines of a followed stream are new, across reconnects.
 
-    A line is identified by its instant, pod, container and text. Only the lines
-    at the newest instant seen can be sent twice (a reconnect resumes there), so
-    the cursor counts how many of each it delivered and skips that many of the
-    replay. Identical lines, from one pod or several, are delivered as many times
-    as they occurred: nothing is deduplicated by text alone. A line older than the
-    newest instant is out of order within one connection, not a replay, and is
-    delivered. Call ``connected`` whenever a connection opens.
+    A line is identified by its instant, pod, container and text. A reconnect
+    resumes one nanosecond before the newest instant delivered, so the gateway
+    resends exactly the lines at that instant (``carry_at``) and everything later,
+    which was never delivered. The cursor counts how many of each line it had
+    delivered at ``carry_at`` and skips that many of the resend, wherever in the
+    new connection they arrive, even after a newer line from another pod. Identical
+    lines, from one pod or several, are delivered as many times as they occurred:
+    nothing is deduplicated by text alone. A line older than the newest instant is
+    out of order within one connection, not a replay, and is delivered. State is
+    bounded by the lines at one instant. Call ``connected`` whenever a connection opens.
+
+    A line with no instant (the gateway's own "log stream unavailable" notice) can't
+    be placed, so it is delivered each time it is sent.
     """
 
     def __init__(self) -> None:
         self.newest: tuple[int, int] | None = None
-        self._delivered: Counter[tuple[str, str, str]] = Counter()
+        self._at_newest: Counter[tuple[str, str, str]] = Counter()
+        self._carry_at: tuple[int, int] | None = None
+        self._carry: Counter[tuple[str, str, str]] = Counter()
         self._replayed: Counter[tuple[str, str, str]] = Counter()
 
     def connected(self) -> None:
+        self._carry_at, self._carry = self.newest, Counter(self._at_newest)
         self._replayed = Counter()
 
     def resume(self, last_id: str) -> str:
         """The ``Last-Event-ID`` to reconnect with: one nanosecond before the newest
         instant delivered, not before the last event's, because pods interleave and
-        the last event can be older than the newest. Everything the gateway resends
-        from there is at or after the newest instant, which is what the cursor counts."""
+        the last event can be older than the newest."""
         if self.newest is None or self.newest[0] * 1_000_000_000 + self.newest[1] < 1:
             return last_id
         return _before(self.newest)
@@ -321,15 +329,15 @@ class LogCursor:
         at = instant(line.time) if line.time else None
         if at is None:
             return True  # no instant to order or resume by
-        if self.newest is None or at > self.newest:
-            self.newest, self._delivered, self._replayed = at, Counter(), Counter()
-        elif at < self.newest:
-            return True
         key = (line.pod, line.container, line.line)
-        self._replayed[key] += 1
-        if self._replayed[key] <= self._delivered[key]:
-            return False
-        self._delivered[key] = self._replayed[key]
+        if at == self._carry_at:
+            self._replayed[key] += 1
+            if self._replayed[key] <= self._carry[key]:
+                return False  # the gateway resent a line already delivered
+        if self.newest is None or at > self.newest:
+            self.newest, self._at_newest = at, Counter()
+        if at == self.newest:
+            self._at_newest[key] += 1
         return True
 
 

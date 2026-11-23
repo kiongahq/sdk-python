@@ -194,7 +194,8 @@ timezone-aware `datetime`). The gateway follows at most 20 pods and closes a str
 after `max_seconds` (1 to 3600, default 600); the client reopens it from the last
 line it delivered, so a long follow has no gaps and no repeats. Identical lines are
 never merged: two pods logging the same text, or one pod logging it twice in the
-same instant, each arrive. A dropped connection is retried with the client's
+same instant, each arrive. The gateway's own "log stream unavailable" notices carry
+no timestamp, so they can't be placed and arrive every time they are sent. A dropped connection is retried with the client's
 `RetryPolicy`. The iterator ends when the pods' logs are finished (no pods running,
 or every log stream closed, for example after a rollout) and passes the gateway's
 reason to `on_end`; follow again with `since` set to the last `line.time` to pick up

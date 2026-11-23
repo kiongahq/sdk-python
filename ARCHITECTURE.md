@@ -63,14 +63,18 @@ stream after `max_seconds` and, on resume, skips every line at or before the
 `Last-Event-ID` instant, so a plain resume could lose a line that shares the last
 instant. The client therefore resumes one nanosecond early (`rewind`) and
 `LogCursor` removes the replay (the resume point is one nanosecond before the newest
-instant delivered, not the last event's, because pods interleave): it counts, per pod, container and text, how many
-lines it already delivered at the newest instant and skips that many on the next
-connection. Nothing is deduplicated by text alone, so identical lines all arrive.
-A line older than the newest instant inside one connection is delivered, because
-pods stream concurrently and their clocks differ. Limits that remain: a line the
-gateway never sent before the connection broke and whose instant is earlier than
-the newest one seen cannot be recovered, because the protocol resumes from one
-timestamp, and lines with no kubelet timestamp carry no id and are not resumable.
+instant delivered, not the last event's, because pods interleave). A resume resends
+only the lines at that one instant, so the cursor keeps, per pod, container and text,
+how many it delivered at that instant and skips that many of the resend wherever in
+the new connection they arrive, even after a newer line from another pod. Its state
+is bounded by the lines at one instant. Nothing is deduplicated by text alone, so
+identical lines all arrive. A line older than the newest instant inside one
+connection is delivered, because pods stream concurrently and their clocks differ.
+Limits that remain: a line the gateway never sent before the connection broke and
+whose instant is earlier than the newest one seen cannot be recovered, because the
+protocol resumes from one timestamp; lines with no kubelet timestamp (the gateway's
+own "log stream unavailable" notices) carry no id, cannot be placed and arrive every
+time they are sent.
 `end` with a `max_seconds` reason reopens the stream; any other reason ends the
 iterator and goes to `on_end`. `LogCursor`, `rewind` and `instant` are pure and
 tested directly.

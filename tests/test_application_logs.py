@@ -237,6 +237,24 @@ def test_rewind_steps_back_one_nanosecond_in_the_gateways_format():
     assert instant("2026-13-24T10:00:00Z") is None
 
 
+def test_a_replay_that_arrives_after_a_newer_line_from_another_pod_is_still_skipped():
+    # After the reconnect pod b's live line (11s) reaches the gateway's channel before pod a's
+    # resend of the 10s line already delivered. The resend must not be delivered again.
+    c, _ = client([sse(log("2026-11-24T10:00:10Z", "x", pod="a"), SLICE),
+                   sse(log("2026-11-24T10:00:11Z", "y", pod="b"), log("2026-11-24T10:00:10Z", "x", pod="a"),
+                       log("2026-11-24T10:00:10Z", "x", pod="a"), DONE)])
+    # the second 10s "x" is a genuine new identical line: it is delivered, the first is not
+    assert lines(c) == [("a", "x"), ("b", "y"), ("a", "x")]
+
+
+def test_the_cursors_memory_is_bounded_by_one_instant():
+    cursor = LogCursor()
+    cursor.connected()
+    for n in range(2000):
+        assert cursor.accept(ApplicationLogLine(pod="p", time=f"{T}.{n + 1:09d}Z", line="same"))
+    assert sum(cursor._at_newest.values()) == 1 and len(cursor._carry) == 0
+
+
 def test_the_cursor_counts_replays_per_connection():
     cursor = LogCursor()
     one = ApplicationLogLine(pod="p", container="c", time=f"{T}.1Z", line="x")
