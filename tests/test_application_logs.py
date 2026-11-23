@@ -132,6 +132,17 @@ def test_a_line_that_arrives_out_of_order_within_a_connection_is_still_delivered
     assert lines(c) == [("a", "from-a"), ("b", "from-b")]
 
 
+def test_a_reconnect_after_out_of_order_lines_resumes_from_the_newest_instant_without_repeats():
+    # Pod a is ahead of pod b when the connection ends. The resume point is the newest
+    # instant (10s), not the last event's (9s), so b's line is not sent a second time.
+    c, seen = client([sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"),
+                          log("2026-11-24T10:00:09Z", "from-b", pod="b"), SLICE),
+                      sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"),
+                          log("2026-11-24T10:00:11Z", "next", pod="b"), DONE)])
+    assert lines(c) == [("a", "from-a"), ("b", "from-b"), ("b", "next")]
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T10:00:09.999999999Z"
+
+
 def test_lines_without_a_time_are_delivered_and_do_not_move_the_resume_point():
     c, seen = client([sse(log("", "no stamp"), log(f"{T}Z", "stamped"), log("", "no stamp"), SLICE),
                       sse(DONE)])

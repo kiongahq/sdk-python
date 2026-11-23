@@ -266,6 +266,14 @@ def instant(stamp: str) -> tuple[int, int] | None:
     return int(whole.timestamp()), int((parts[2] or "0").ljust(9, "0"))
 
 
+def _before(at: tuple[int, int]) -> str:
+    """The instant one nanosecond before ``at``, in the gateway's own format."""
+    seconds, nanos = divmod(at[0] * 1_000_000_000 + at[1] - 1, 1_000_000_000)
+    text = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    fraction = f".{nanos:09d}".rstrip("0") if nanos else ""
+    return f"{text}{fraction}Z"
+
+
 def rewind(stamp: str) -> str:
     """The instant one nanosecond before ``stamp``, in the gateway's own format.
 
@@ -275,15 +283,9 @@ def rewind(stamp: str) -> str:
     cut off. A stamp that can't be parsed is returned unchanged.
     """
     at = instant(stamp)
-    if at is None:
+    if at is None or at[0] * 1_000_000_000 + at[1] < 1:
         return stamp
-    total = at[0] * 1_000_000_000 + at[1] - 1
-    if total < 0:
-        return stamp
-    seconds, nanos = divmod(total, 1_000_000_000)
-    text = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    fraction = f".{nanos:09d}".rstrip("0") if nanos else ""
-    return f"{text}{fraction}Z"
+    return _before(at)
 
 
 class LogCursor:
@@ -305,6 +307,15 @@ class LogCursor:
 
     def connected(self) -> None:
         self._replayed = Counter()
+
+    def resume(self, last_id: str) -> str:
+        """The ``Last-Event-ID`` to reconnect with: one nanosecond before the newest
+        instant delivered, not before the last event's, because pods interleave and
+        the last event can be older than the newest. Everything the gateway resends
+        from there is at or after the newest instant, which is what the cursor counts."""
+        if self.newest is None or self.newest[0] * 1_000_000_000 + self.newest[1] < 1:
+            return last_id
+        return _before(self.newest)
 
     def accept(self, line: ApplicationLogLine) -> bool:
         at = instant(line.time) if line.time else None

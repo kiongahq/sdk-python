@@ -24,7 +24,6 @@ from ..applications import (
     failure_reason,
     log_line,
     log_stream_params,
-    rewind,
 )
 from ..data import _items, _name
 from ..errors import NotConfiguredError
@@ -193,7 +192,7 @@ class ApplicationsAPI:
         """
         params = log_stream_params(tail=tail, container=container, since=since, max_seconds=max_seconds)
         cursor = LogCursor()
-        stream = self._stream(f"{BASE}/{_name(name)}/logs", params=params, resume=rewind,
+        stream = self._stream(f"{BASE}/{_name(name)}/logs", params=params, resume=cursor.resume,
                               on_connect=cursor.connected)
         try:
             async for event in stream:

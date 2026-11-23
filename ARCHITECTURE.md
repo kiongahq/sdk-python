@@ -62,7 +62,8 @@ Followed logs (`follow_application_logs`) ride on `_stream`. The gateway ends a 
 stream after `max_seconds` and, on resume, skips every line at or before the
 `Last-Event-ID` instant, so a plain resume could lose a line that shares the last
 instant. The client therefore resumes one nanosecond early (`rewind`) and
-`LogCursor` removes the replay: it counts, per pod, container and text, how many
+`LogCursor` removes the replay (the resume point is one nanosecond before the newest
+instant delivered, not the last event's, because pods interleave): it counts, per pod, container and text, how many
 lines it already delivered at the newest instant and skips that many on the next
 connection. Nothing is deduplicated by text alone, so identical lines all arrive.
 A line older than the newest instant inside one connection is delivered, because
