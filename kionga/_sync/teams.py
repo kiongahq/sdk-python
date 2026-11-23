@@ -33,7 +33,7 @@ class TeamsAPI:
 
     def list_agent_definitions(self, project_id: str = "") -> list[AgentDefinition]:
         params = {"project_id": project_id} if project_id else None
-        items = self._request("GET", "/api/v1/agent-definitions", params=params)["items"]
+        items = (self._request("GET", "/api/v1/agent-definitions", params=params))["items"]
         return [AgentDefinition.model_validate(item) for item in items]
 
     def get_agent_definition(self, definition_id: str) -> AgentDefinition:
@@ -54,13 +54,13 @@ class TeamsAPI:
         self._request("DELETE", f"/api/v1/agent-definitions/{_path(definition_id)}")
 
     def agent_definition_revisions(self, definition_id: str) -> list[dict[str, Any]]:
-        return self._request("GET", f"/api/v1/agent-definitions/{_path(definition_id)}/revisions")["items"]
+        return (self._request("GET", f"/api/v1/agent-definitions/{_path(definition_id)}/revisions"))["items"]
 
     # Teams
 
     def list_agent_teams(self, project_id: str = "") -> list[AgentTeam]:
         params = {"project_id": project_id} if project_id else None
-        items = self._request("GET", "/api/v1/agent-teams", params=params)["items"]
+        items = (self._request("GET", "/api/v1/agent-teams", params=params))["items"]
         return [AgentTeam.model_validate(item) for item in items]
 
     def get_agent_team(self, team_id: str) -> AgentTeam:
@@ -78,7 +78,7 @@ class TeamsAPI:
         self._request("DELETE", f"/api/v1/agent-teams/{_path(team_id)}")
 
     def agent_team_revisions(self, team_id: str) -> list[dict[str, Any]]:
-        return self._request("GET", f"/api/v1/agent-teams/{_path(team_id)}/revisions")["items"]
+        return (self._request("GET", f"/api/v1/agent-teams/{_path(team_id)}/revisions"))["items"]
 
     # Team runs
 
@@ -94,14 +94,14 @@ class TeamsAPI:
 
     def list_team_runs(self, team_id: str = "", project_id: str = "") -> list[TeamRun]:
         params = {k: v for k, v in {"team_id": team_id, "project_id": project_id}.items() if v}
-        items = self._request("GET", "/api/v1/team-runs", params=params or None)["items"]
+        items = (self._request("GET", "/api/v1/team-runs", params=params or None))["items"]
         return [TeamRun.model_validate(item) for item in items]
 
     def get_team_run(self, run_id: str) -> TeamRun:
         return TeamRun.model_validate(self._request("GET", f"/api/v1/team-runs/{_path(run_id)}"))
 
     def team_run_workers(self, run_id: str) -> list[TeamWorker]:
-        items = self._request("GET", f"/api/v1/team-runs/{_path(run_id)}/workers")["items"]
+        items = (self._request("GET", f"/api/v1/team-runs/{_path(run_id)}/workers"))["items"]
         return [TeamWorker.model_validate(item) for item in items]
 
     def get_team_worker(self, run_id: str, worker_id: str) -> TeamWorker:

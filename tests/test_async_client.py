@@ -124,3 +124,22 @@ async def test_closing_the_client_closes_its_connections():
     c = client(handler)
     await c.aclose()
     assert c._client.is_closed
+
+
+async def test_methods_that_read_one_field_of_the_response_await_it_first():
+    # `await self._request(...)["items"]` subscripts the coroutine, not the body,
+    # and raised TypeError for every async list method.
+    def handler(request):
+        if request.url.path == "/api/v1/storage/buckets":
+            return ok({"buckets": ["kionga-features"]})
+        return ok({"items": []})
+
+    async with client(handler) as c:
+        assert await c.list_models() == []
+        assert await c.list_agent_definitions() == []
+        assert await c.list_agent_teams() == []
+        assert await c.list_team_runs() == []
+        assert await c.list_agent_approvals() == []
+        assert await c.list_project_agent_versions() == []
+        assert await c.search_huggingface_models("bert") == []
+        assert await c.list_buckets() == ["kionga-features"]

@@ -46,6 +46,21 @@ The public import paths. `client.py` re-exports both clients. The other modules
 hold what both clients share: response models, errors, the retry policy and pure
 helpers. So `KiongaClient` and `AsyncKiongaClient` return the same classes.
 
+### `kionga/applications.py`, `kionga/_async/applications.py`, `kionga/cli.py`
+
+Applications (`/api/v1/applications/{name}`): `applications.py` holds the response
+models, `application_body` (validation and the request body), `failure_reason` and
+the errors; the async mixin holds the methods, generated into `_sync` like the rest
+of the client. The gateway replaces an application's whole configuration on `PUT`,
+so `update_application` reads it, merges the changes and writes it back. Every
+applications call turns the gateway's `not_configured` answer into
+`ApplicationsNotConfiguredError`, because applications exist only on Kubernetes
+installs; it keeps the status error class, so `ConflictError` handlers still catch it.
+
+`cli.py` is the `kionga` console script (and `python -m kionga`): argparse
+subcommands under `kionga apps`, built on `KiongaClient`. `main` takes a
+`client_factory` so tests run it against `httpx.MockTransport`.
+
 ### `kionga/transport.py`
 
 The rule for where a bearer token may travel over plaintext HTTP: loopback and
@@ -58,8 +73,9 @@ because tracing must never break the caller.
 
 Pydantic models for gateway responses: `Project`, `ProjectTemplate`,
 `PipelineRun`, `PipelineDefinition`, `Function`, `Model`, `Agent`, `Tool`,
-`Connection`, `AgentSession`, `AgentTrace`, `AuditEvent`, `Readiness` and their
-parts. Where the gateway can encode an empty list as `null` (for example a
+`Connection`, `AgentSession`, `AgentTrace`, `AuditEvent`, `Readiness`, `Scaling`
+and their parts. `Model` reports its deployment (`serving`, `deployment_failed`,
+`deployment_reason`) for `wait_for_model_deployment`. Where the gateway can encode an empty list as `null` (for example a
 project's `capabilities`), a validator turns it into `[]`.
 
 ### `kionga/pipelines.py`
