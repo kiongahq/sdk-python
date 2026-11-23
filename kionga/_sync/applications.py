@@ -15,6 +15,7 @@ from ..applications import (
     ApplicationsNotConfiguredError,
     ApplicationTimeout,
     GitSource,
+    LogReplayFilter,
     Scaling,
     application_body,
     failure_reason,
@@ -141,41 +142,23 @@ class ApplicationsAPI:
         iterating.
 
         If the connection drops it reconnects from the last line's timestamp
-        (``since``), skipping lines it already yielded, or with ``tail=0`` when lines
-        carry no timestamp, so nothing is repeated. Lines written while it was
-        disconnected are lost in that second case.
+        (``since``) and skips the lines the gateway sends again, or with ``tail=0``
+        when lines carry no timestamp. In that second case lines written while it
+        was disconnected are lost.
         """
-        last: datetime | None = None
-        seen_at_last: set[tuple[str, str, str]] = set()
-
-        def resume() -> dict[str, str]:
-            if last is not None:
-                return {"follow": "true", "since": last.isoformat()}
-            return {"follow": "true", "tail": "0"}
-
+        replay = LogReplayFilter()
         params = {"follow": "true", **({"tail": str(tail)} if tail else {})}
         path = f"{BASE}/{_name(application_id)}/logs/stream"
         try:
-            for message in self._stream(path, params=params, resume=resume):
+            for message in self._stream(path, params=params, resume=replay.resume_params):
                 if message.event == "end":
                     return
                 if message.event == "error":
                     raise StreamError(f"application log stream: {message.data}")
                 for item in _log_items(message.data):
                     line = ApplicationLogLine.model_validate(item)
-                    if line.timestamp is not None:
-                        # `since` is inclusive, so a resumed stream repeats the lines
-                        # of the last timestamp; drop those and anything older.
-                        key = (line.pod, line.container, line.message)
-                        if last is not None and _older(line.timestamp, last):
-                            continue
-                        if last is not None and line.timestamp == last:
-                            if key in seen_at_last:
-                                continue
-                        else:
-                            last, seen_at_last = line.timestamp, set()
-                        seen_at_last.add(key)
-                    yield line
+                    if replay.accept(line):
+                        yield line
         except NotConfiguredError as error:
             raise ApplicationsNotConfiguredError.from_error(error) from None
 
@@ -244,11 +227,7 @@ def _caught_up(application: Application, generation: int | None) -> bool:
     observed = application.status.observed_generation
     if observed is None:
         observed = application.generation
-    return observed is not None and observed >= generation
+    # A gateway that reports no generation can't tell rollouts apart: fall back to
+    # the phase rather than waiting until the timeout.
+    return observed is None or observed >= generation
 
-
-def _older(value: datetime, than: datetime) -> bool:
-    try:
-        return value < than
-    except TypeError:  # one is timezone-aware and the other isn't: can't order them
-        return False

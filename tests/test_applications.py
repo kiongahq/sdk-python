@@ -411,3 +411,42 @@ def test_a_resumed_log_stream_without_timestamps_asks_for_new_lines_only():
     ]})
     assert [line.message for line in c.stream_application_logs("billing", tail=5)] == ["repeated", "new"]
     assert gw.seen[1].url.params["tail"] == "0"
+
+
+def test_wait_with_a_generation_falls_back_to_the_phase_when_reads_carry_none():
+    c, _ = client({("GET", f"{BASE}/app-1"): ok(with_status(phase="ready"))})
+    assert c.wait_until_ready("app-1", generation=5).ready
+
+
+def test_identical_live_lines_in_the_same_instant_all_come_through():
+    line = 'event: log\ndata: {"pod": "p", "message": "same", "ts": "2026-11-19T00:00:01Z"}\n\n'
+    c, _ = client({("GET", f"{BASE}/billing/logs/stream"): stream(line * 2 + "event: end\ndata: {}\n\n")})
+    assert [entry.message for entry in c.stream_application_logs("billing")] == ["same", "same"]
+
+
+def test_a_resume_drops_only_as_many_repeats_as_were_seen():
+    line = 'event: log\ndata: {"pod": "p", "message": "same", "ts": "2026-11-19T00:00:01Z"}\n\n'
+    c, _ = client({("GET", f"{BASE}/billing/logs/stream"): [
+        stream(line),
+        stream(line * 2 + "event: end\ndata: {}\n\n"),  # the replayed one, then a new one
+    ]})
+    assert [entry.message for entry in c.stream_application_logs("billing")] == ["same", "same"]
+
+
+def test_a_replay_with_naive_timestamps_is_matched_as_utc():
+    c, _ = client({("GET", f"{BASE}/billing/logs/stream"): [
+        stream('event: log\ndata: {"message": "a", "ts": "2026-11-19T00:00:01Z"}\n\n'),
+        stream('event: log\ndata: {"message": "a", "ts": "2026-11-19T00:00:01"}\n\n'
+               'event: log\ndata: {"message": "b", "ts": "2026-11-19T00:00:02"}\n\n'
+               "event: end\ndata: {}\n\n"),
+    ]})
+    assert [entry.message for entry in c.stream_application_logs("billing")] == ["a", "b"]
+
+
+def test_a_failed_first_connection_keeps_the_requested_tail():
+    c, gw = client({("GET", f"{BASE}/billing/logs/stream"): [
+        ok({"error": "unavailable"}, 503),
+        stream('event: log\ndata: {"message": "a"}\n\nevent: end\ndata: {}\n\n'),
+    ]})
+    assert [entry.message for entry in c.stream_application_logs("billing", tail=5)] == ["a"]
+    assert [request.url.params["tail"] for request in gw.seen] == ["5", "5"]

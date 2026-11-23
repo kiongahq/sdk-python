@@ -49,15 +49,15 @@ class StreamingAPI:
 
         Ends only when the caller stops iterating. Failures to connect use the
         client's retry policy; the count resets once a connection delivers events.
-        ``resume``, when given, supplies the query for every reconnect, for streams
-        whose events carry no id to resume from.
+        ``resume``, when given, supplies the query for every reconnect after a
+        connection that delivered events, for streams whose events carry no id to
+        resume from. Until then the original ``params`` are retried.
         """
         failures = 0
         query, connected = params, False
         while True:
             if connected and resume is not None:
                 query = resume()
-            connected = True
             headers = {"Accept": "text/event-stream"}
             if last_id:
                 headers["Last-Event-ID"] = last_id
@@ -75,7 +75,7 @@ class StreamingAPI:
                         await self._sleep(self.retry.delay(failures, response))
                         continue
                     async for event in parse_events(response.aiter_lines()):
-                        delivered = True
+                        delivered = connected = True
                         if event.id:
                             last_id = event.id
                         yield event

@@ -15,7 +15,8 @@ models, errors and the request validation.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -211,6 +212,55 @@ class ApplicationLogLine(_Open):
             if "timestamp" not in value and value.get("ts"):
                 value["timestamp"] = value["ts"]
         return value
+
+
+class LogReplayFilter:
+    """Drops the lines a resumed log stream sends again.
+
+    A resumed stream asks for lines ``since`` the last timestamp seen, inclusive,
+    so the gateway repeats the lines of that timestamp. Only those repeats are
+    dropped, counted per pod, container and message, so identical lines written
+    in the same instant still all come through. Live lines are never filtered.
+    Timestamps without a timezone are taken as UTC, as Kubernetes writes them.
+    """
+
+    def __init__(self) -> None:
+        self.last: datetime | None = None
+        self.at_last: Counter[tuple[str, str, str]] = Counter()
+        self.replay: Counter[tuple[str, str, str]] | None = None
+
+    def resume_params(self) -> dict[str, str]:
+        """The query for a reconnect, and the start of replay filtering."""
+        if self.last is None:
+            self.replay = None
+            return {"follow": "true", "tail": "0"}
+        self.replay = Counter(self.at_last)
+        return {"follow": "true", "since": self.last.isoformat()}
+
+    def accept(self, line: ApplicationLogLine) -> bool:
+        if line.timestamp is None:
+            return True
+        ts = _utc(line.timestamp)
+        key = (line.pod, line.container, line.message)
+        if self.replay is not None and self.last is not None:
+            if ts < self.last:
+                return False
+            if ts == self.last and self.replay[key] > 0:
+                self.replay[key] -= 1
+                return False
+            if ts > self.last:
+                self.replay = None
+        if self.last is None or ts > self.last:
+            self.last, self.at_last = ts, Counter()
+        if ts == self.last:
+            self.at_last[key] += 1
+        return True
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class ApplicationsNotConfiguredError(NotConfiguredError):
