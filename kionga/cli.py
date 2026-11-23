@@ -3,6 +3,7 @@
     kionga apps deploy billing --project p-1 --image ghcr.io/acme/billing:1.4 --wait
     kionga apps list
     kionga apps logs billing --tail 50
+    kionga apps logs billing --follow --since 10m
 
 It reads the gateway address from ``KIONGA_URL`` and the API key from
 ``KIONGA_TOKEN``, like ``KiongaClient``. Errors print as ``kionga: <reason>`` and
@@ -12,9 +13,13 @@ exit with status 1. ``--json`` prints the gateway's response instead of a table.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
+import re
 import sys
 from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .applications import (
@@ -64,6 +69,11 @@ def parser() -> argparse.ArgumentParser:
     logs.add_argument("application")
     logs.add_argument("--tail", type=int, default=None, help="lines per pod, 1 to 2000 (default 200)")
     logs.add_argument("--container", default="", help="container name (default: each pod's first)")
+    logs.add_argument("-f", "--follow", action="store_true",
+                      help="keep streaming new lines until Ctrl-C (the stream resumes after a drop)")
+    logs.add_argument("--since", default="", metavar="TIME",
+                      help="with --follow: start after this RFC 3339 time or this long ago "
+                           "(30s, 10m, 2h, 1d) instead of the last --tail lines")
     logs.set_defaults(run=apps_logs)
 
     events = app_commands.add_parser("events", help="print an application's Kubernetes events")
@@ -174,11 +184,50 @@ def apps_get(client: Any, args: argparse.Namespace) -> None:
 
 
 def apps_logs(client: Any, args: argparse.Namespace) -> None:
+    if args.since and not args.follow:
+        raise ValueError("--since needs --follow")
+    if args.follow:
+        _follow_logs(client, args)
+        return
     for pod in client.application_logs(args.application, tail=args.tail, container=args.container):
         for message in pod.messages:
             print(f"[{pod.pod}] {message}")
         if pod.error:
             print(f"kionga: {pod.pod}: {pod.error}", file=sys.stderr)
+
+
+def _follow_logs(client: Any, args: argparse.Namespace) -> None:
+    def ended(reason: str) -> None:
+        print(f"kionga: log stream ended: {reason or 'no reason given'}", file=sys.stderr)
+
+    since = parse_since(args.since) if args.since else None
+    lines = client.follow_application_logs(args.application, tail=args.tail, container=args.container,
+                                           since=since, on_end=ended)
+    try:
+        with contextlib.closing(lines):
+            for entry in lines:
+                print(f"[{entry.pod}] {entry.line}", flush=True)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)  # Ctrl-C is how a follow is meant to stop: not an error
+    except BrokenPipeError:  # `kionga apps logs -f | head`: stop quietly
+        with contextlib.suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+
+
+_DURATION = re.compile(r"^(\d+)([smhd])$")
+_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
+
+
+def parse_since(value: str, *, now: datetime | None = None) -> str:
+    """An RFC 3339 time as given, or a duration such as ``10m`` as that long before ``now``."""
+    match = _DURATION.match(value.strip())
+    if not match:
+        return value.strip()  # the client validates the timestamp
+    try:
+        moment = (now or datetime.now(timezone.utc)) - timedelta(**{_UNITS[match[2]]: int(match[1])})
+    except OverflowError:
+        raise ValueError(f"--since {value!r} reaches further back than time can express") from None
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def apps_events(client: Any, args: argparse.Namespace) -> None:

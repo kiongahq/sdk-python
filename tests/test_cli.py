@@ -2,13 +2,14 @@
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 import pytest
 
 import kionga
-from kionga.cli import main
+from kionga.cli import main, parse_since
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = "/api/v1/applications"
@@ -199,8 +200,93 @@ def test_update_wait_passes_the_new_generation(capsys):
     assert code == 0 and [r.method for r in seen] == ["GET", "PUT", "GET", "GET"]
 
 
-def test_logs_do_not_follow_because_the_gateway_does_not_stream(capsys):
-    with pytest.raises(SystemExit) as caught:
-        main(["apps", "logs", "billing", "--follow"])
-    assert caught.value.code == 2
+def stream(*blocks):
+    return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content="".join(blocks).encode())
+
+
+def log_event(time, line, pod="billing-0"):
+    body = json.dumps({"pod": pod, "container": "app", "time": time, "line": line})
+    return f"id: {time}\nevent: log\ndata: {body}\n\n"
+
+
+def test_logs_follow_streams_lines_until_the_pods_finish(capsys):
+    route = {("GET", f"{BASE}/billing/logs"): [
+        stream(log_event("2026-11-24T10:00:00.1Z", "started"), log_event("2026-11-24T10:00:00.2Z", "up", "billing-1"),
+               'event: end\ndata: {"reason":"max_seconds reached; reconnect"}\n\n'),
+        stream(log_event("2026-11-24T10:00:01Z", "ready"),
+               'event: end\ndata: {"reason":"all pod log streams closed"}\n\n')]}
+    code, out, err, seen = run(["apps", "logs", "billing", "-f", "--tail", "5", "--container", "app"], route, capsys)
+    assert code == 0
+    assert out == "[billing-0] started\n[billing-1] up\n[billing-0] ready\n"
+    assert err == "kionga: log stream ended: all pod log streams closed\n"
+    assert seen[0].url.params["follow"] == "true" and seen[0].url.params["tail"] == "5"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T10:00:00.199999999Z"
+
+
+def test_logs_since_takes_a_timestamp_or_a_duration(capsys):
+    done = stream('event: end\ndata: {"reason":"no pods are running"}\n\n')
+    code, _, err, seen = run(["apps", "logs", "billing", "--follow", "--since", "2026-11-24T09:00:00Z"],
+                             {("GET", f"{BASE}/billing/logs"): done}, capsys)
+    assert code == 0 and seen[0].url.params["since"] == "2026-11-24T09:00:00Z"
+    assert err == "kionga: log stream ended: no pods are running\n"
+    code, _, _, seen = run(["apps", "logs", "billing", "--follow", "--since", "10m"],
+                           {("GET", f"{BASE}/billing/logs"): done}, capsys)
+    assert code == 0 and seen[0].url.params["since"].endswith("Z") and "T" in seen[0].url.params["since"]
+
+
+def test_since_durations_are_exact():
+    now = datetime(2026, 11, 24, 10, 0, 0, tzinfo=timezone.utc)
+    assert parse_since("30s", now=now) == "2026-11-24T09:59:30.000000Z"
+    assert parse_since("2h", now=now) == "2026-11-24T08:00:00.000000Z"
+    assert parse_since("1d", now=now) == "2026-11-23T10:00:00.000000Z"
+    assert parse_since(" 2026-11-24T09:00:00Z ") == "2026-11-24T09:00:00Z"
+    with pytest.raises(ValueError, match="further back"):
+        parse_since("9999999999999d")
+
+
+def test_since_without_follow_and_a_bad_since_fail_with_a_message(capsys):
+    code, _, err, seen = run(["apps", "logs", "billing", "--since", "10m"], {}, capsys)
+    assert code == 1 and "--since needs --follow" in err and seen == []
+    code, _, err, seen = run(["apps", "logs", "billing", "-f", "--since", "yesterday"], {}, capsys)
+    assert code == 1 and "RFC 3339" in err and seen == []
+
+
+def test_follow_on_compose_says_applications_need_kubernetes(capsys):
+    body = {"error": "not_configured", "message": "Applications run only on Kubernetes.", "steps": ["Use Helm."]}
+    code, out, err, seen = run(["apps", "logs", "billing", "-f"],
+                               {("GET", f"{BASE}/billing/logs"): ok(body, 409)}, capsys)
+    assert code == 1 and out == "" and "Kubernetes" in err and len(seen) == 1
+
+
+class FakeFollow:
+    """A client whose stream raises what a terminal does."""
+
+    def __init__(self, error):
+        self.error, self.closed = error, False
+
+    def follow_application_logs(self, name, **kwargs):
+        try:
+            yield kionga.ApplicationLogLine(pod="billing-0", line="first")
+            raise self.error
+        finally:
+            self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_ctrl_c_ends_a_follow_cleanly_and_closes_the_stream(capsys):
+    fake = FakeFollow(KeyboardInterrupt())
+    code = main(["apps", "logs", "billing", "-f"], client_factory=lambda url: fake)
+    out, err = capsys.readouterr()
+    assert code == 0 and out == "[billing-0] first\n" and "Traceback" not in err and fake.closed
+
+
+def test_a_closed_pipe_ends_a_follow_quietly(capsys):
+    fake = FakeFollow(BrokenPipeError())
+    assert main(["apps", "logs", "billing", "-f"], client_factory=lambda url: fake) == 0
+    assert fake.closed
     capsys.readouterr()

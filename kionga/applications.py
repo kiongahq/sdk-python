@@ -16,7 +16,9 @@ validation; the checks here catch mistakes before a round trip.
 
 from __future__ import annotations
 
+import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,12 +26,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .errors import ConflictError, NotConfiguredError, ServerError
 from .models import SCALING_METRICS, Scaling, scaling_body
+from .sse import ServerSentEvent, StreamError
 
 __all__ = [
     "Application",
     "ApplicationCondition",
     "ApplicationEvent",
     "ApplicationFailed",
+    "ApplicationLogLine",
     "ApplicationPodLogs",
     "ApplicationStatus",
     "ApplicationTimeout",
@@ -46,6 +50,10 @@ ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 VISIBILITIES = ("public", "sso")
 MAX_REPLICAS = 100
 MAX_LOG_TAIL = 2000
+MAX_FOLLOW_SECONDS = 3600
+# The gateway ends a followed stream with this reason when its time slice is used up;
+# any other end reason means the pods' logs are finished.
+SLICE_END = "max_seconds"
 # The fields a create or a replace accepts (the gateway rejects unknown fields).
 REQUEST_FIELDS = ("name", "project_id", "image", "source", "port", "env", "secret_refs", "resources",
                   "replicas", "scaling", "health_path", "visibility")
@@ -218,6 +226,140 @@ class ApplicationPodLogs(_Open):
     @property
     def messages(self) -> list[str]:
         return self.lines.splitlines()
+
+
+class ApplicationLogLine(_Open):
+    """One line of a followed log stream. ``time`` is the RFC 3339 timestamp with
+    nanoseconds the kubelet stamped on it (``""`` if it had none)."""
+
+    pod: str = ""
+    container: str = ""
+    time: str = ""
+    line: str = ""
+
+    @property
+    def timestamp(self) -> datetime | None:
+        """``time`` as a datetime, at microsecond precision."""
+        parts = _STAMP.match(self.time)
+        if not parts:
+            return None
+        micro = (parts[2] or "").ljust(6, "0")[:6]
+        zone = "+00:00" if parts[3] == "Z" else parts[3]
+        try:
+            return datetime.fromisoformat(f"{parts[1]}.{micro}{zone}")
+        except ValueError:
+            return None
+
+
+_STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$")
+
+
+def instant(stamp: str) -> tuple[int, int] | None:
+    """An RFC 3339 timestamp as exact ``(epoch seconds, nanoseconds)``, or ``None``."""
+    parts = _STAMP.match(stamp)
+    if not parts:
+        return None
+    try:
+        whole = datetime.fromisoformat(parts[1] + ("+00:00" if parts[3] == "Z" else parts[3]))
+    except ValueError:
+        return None
+    return int(whole.timestamp()), int((parts[2] or "0").ljust(9, "0"))
+
+
+def rewind(stamp: str) -> str:
+    """The instant one nanosecond before ``stamp``, in the gateway's own format.
+
+    The gateway skips lines at or before the resume point. Resuming one
+    nanosecond early makes it send the lines that share the last instant again,
+    so ``LogCursor`` can tell the ones already delivered from the ones that were
+    cut off. A stamp that can't be parsed is returned unchanged.
+    """
+    at = instant(stamp)
+    if at is None:
+        return stamp
+    total = at[0] * 1_000_000_000 + at[1] - 1
+    if total < 0:
+        return stamp
+    seconds, nanos = divmod(total, 1_000_000_000)
+    text = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    fraction = f".{nanos:09d}".rstrip("0") if nanos else ""
+    return f"{text}{fraction}Z"
+
+
+class LogCursor:
+    """Decides which lines of a followed stream are new, across reconnects.
+
+    A line is identified by its instant, pod, container and text. Only the lines
+    at the newest instant seen can be sent twice (a reconnect resumes there), so
+    the cursor counts how many of each it delivered and skips that many of the
+    replay. Identical lines, from one pod or several, are delivered as many times
+    as they occurred: nothing is deduplicated by text alone. A line older than the
+    newest instant is out of order within one connection, not a replay, and is
+    delivered. Call ``connected`` whenever a connection opens.
+    """
+
+    def __init__(self) -> None:
+        self.newest: tuple[int, int] | None = None
+        self._delivered: Counter[tuple[str, str, str]] = Counter()
+        self._replayed: Counter[tuple[str, str, str]] = Counter()
+
+    def connected(self) -> None:
+        self._replayed = Counter()
+
+    def accept(self, line: ApplicationLogLine) -> bool:
+        at = instant(line.time) if line.time else None
+        if at is None:
+            return True  # no instant to order or resume by
+        if self.newest is None or at > self.newest:
+            self.newest, self._delivered, self._replayed = at, Counter(), Counter()
+        elif at < self.newest:
+            return True
+        key = (line.pod, line.container, line.line)
+        self._replayed[key] += 1
+        if self._replayed[key] <= self._delivered[key]:
+            return False
+        self._delivered[key] = self._replayed[key]
+        return True
+
+
+def log_line(event: ServerSentEvent) -> ApplicationLogLine:
+    try:
+        return ApplicationLogLine.model_validate(json.loads(event.data))
+    except ValueError as error:  # JSON or model validation
+        raise StreamError(f"malformed log event from the gateway: {error}") from error
+
+
+def end_reason(event: ServerSentEvent) -> str:
+    try:
+        reason = json.loads(event.data).get("reason", "")
+    except (ValueError, AttributeError):
+        return ""
+    return reason if isinstance(reason, str) else ""
+
+
+def log_stream_params(*, tail: int | None, container: str, since: str | datetime | None,
+                      max_seconds: int | None) -> dict[str, str]:
+    """Validate the arguments of a followed log stream and build its query."""
+    params = {"follow": "true"}
+    if tail is not None:
+        if not 1 <= tail <= MAX_LOG_TAIL:
+            raise ValueError(f"tail must be 1 to {MAX_LOG_TAIL}")
+        params["tail"] = str(tail)
+    if container:
+        params["container"] = container
+    if since is not None and since != "":
+        if isinstance(since, datetime):
+            if since.tzinfo is None:
+                raise ValueError("since must carry a time zone")
+            since = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        if instant(since) is None:
+            raise ValueError("since must be an RFC 3339 timestamp, such as 2026-11-24T10:00:00Z")
+        params["since"] = since
+    if max_seconds is not None:
+        if not 1 <= max_seconds <= MAX_FOLLOW_SECONDS:
+            raise ValueError(f"max_seconds must be 1 to {MAX_FOLLOW_SECONDS}")
+        params["max_seconds"] = str(max_seconds)
+    return params
 
 
 class ApplicationsNotConfiguredError(NotConfiguredError):

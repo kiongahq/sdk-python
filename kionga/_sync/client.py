@@ -669,14 +669,20 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
 
     def deploy_agent_version(
         self, version_id: str, *, min_replicas: int = 1, max_replicas: int = 1, cpu: str = "500m",
-        memory: str = "1Gi", require_evaluation: bool = False,
+        memory: str = "1Gi", require_evaluation: bool = False, scaling: Scaling | dict | None = None,
     ) -> dict:
-        """Deploy (or roll back to) a published version on the managed agent runtime."""
+        """Deploy (or roll back to) a published version on the managed agent runtime.
+
+        ``scaling`` chooses what drives autoscaling between ``min_replicas`` and
+        ``max_replicas``: ``{"metric": "requests", "target": 10}`` (in-flight requests
+        per replica, 1 to 10000) or ``{"metric": "cpu", "target": 70}`` (percent of the
+        CPU request, 1 to 100). Without it the gateway picks its default.
+        """
+        body = {"autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
+                "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation,
+                **scaling_body(scaling)}
         return self._request(
-            "POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/deploy",
-            json={"autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
-                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation},
-        )
+            "POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/deploy", json=body)
 
     def list_agent_approvals(self, *, status: str = "pending", project_id: str = "", run_id: str = "") -> list[dict]:
         """Approval requests from approval nodes, newest first."""

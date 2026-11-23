@@ -1,7 +1,7 @@
 # Async source of truth. kionga/_sync is generated from this by scripts/unasync.py.
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -43,17 +43,20 @@ class StreamingAPI:
     _sleep: Any
 
     async def _stream(self, path: str, *, params: dict[str, Any] | None = None,
-                last_id: str = "") -> AsyncIterator[ServerSentEvent]:
+                last_id: str = "", resume: Callable[[str], str] | None = None,
+                on_connect: Callable[[], None] | None = None) -> AsyncIterator[ServerSentEvent]:
         """Yield events, reconnecting from the last id whenever the stream ends.
 
         Ends only when the caller stops iterating. Failures to connect use the
         client's retry policy; the count resets once a connection delivers events.
+        ``resume`` maps the last id to the ``Last-Event-ID`` to send, and
+        ``on_connect`` is called each time a connection opens.
         """
         failures = 0
         while True:
             headers = {"Accept": "text/event-stream"}
             if last_id:
-                headers["Last-Event-ID"] = last_id
+                headers["Last-Event-ID"] = resume(last_id) if resume else last_id
             delivered = False
             try:
                 async with self._client.stream("GET", path, params=params, headers=headers,
@@ -67,6 +70,8 @@ class StreamingAPI:
                         failures += 1
                         await self._sleep(self.retry.delay(failures, response))
                         continue
+                    if on_connect:
+                        on_connect()
                     async for event in parse_events(response.aiter_lines()):
                         delivered = True
                         if event.id:

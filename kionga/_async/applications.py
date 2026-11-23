@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator, Callable
+from datetime import datetime
 from typing import Any
 
 from ..applications import (
@@ -9,13 +11,20 @@ from ..applications import (
     Application,
     ApplicationEvent,
     ApplicationFailed,
+    ApplicationLogLine,
     ApplicationPodLogs,
     ApplicationsNotConfiguredError,
     ApplicationTimeout,
+    SLICE_END,
     GitSource,
+    LogCursor,
     Scaling,
     application_body,
+    end_reason,
     failure_reason,
+    log_line,
+    log_stream_params,
+    rewind,
 )
 from ..data import _items, _name
 from ..errors import NotConfiguredError
@@ -162,6 +171,48 @@ class ApplicationsAPI:
             params["container"] = container
         body = await self._apps("GET", f"{BASE}/{_name(name)}/logs", params=params or None)
         return [ApplicationPodLogs.model_validate(item) for item in _items(body)]
+
+    async def follow_application_logs(
+        self, name: str, *, tail: int | None = None, container: str = "",
+        since: str | datetime | None = None, max_seconds: int | None = None,
+        on_end: Callable[[str], None] | None = None,
+    ) -> AsyncIterator[ApplicationLogLine]:
+        """Yield log lines as the application's pods write them (Server-Sent Events).
+
+        Starts with the last ``tail`` lines (1 to 2000, default 200) of each pod, or
+        with the lines after ``since`` (an RFC 3339 timestamp or a timezone-aware
+        datetime). The gateway streams at most 20 pods and closes the stream after
+        ``max_seconds`` (1 to 3600, default 600); this reopens it from the last line
+        delivered, so a long follow has no gaps and no repeats, and identical lines
+        are all delivered. Dropped connections are retried with the client's policy.
+
+        The iterator ends when the pods' logs finish (no pods are running, or every
+        log stream closed, such as after a rollout); ``on_end`` then receives the
+        gateway's reason. Pods that start later are picked up by following again
+        with ``since`` set to the last ``line.time``. Stop early by leaving the loop.
+        """
+        params = log_stream_params(tail=tail, container=container, since=since, max_seconds=max_seconds)
+        cursor = LogCursor()
+        stream = self._stream(f"{BASE}/{_name(name)}/logs", params=params, resume=rewind,
+                              on_connect=cursor.connected)
+        try:
+            async for event in stream:
+                if event.event == "end":
+                    reason = end_reason(event)
+                    if reason.startswith(SLICE_END):
+                        continue  # the time slice is used up: the stream reopens
+                    if on_end:
+                        on_end(reason)
+                    return
+                if event.event != "log":
+                    continue
+                line = log_line(event)
+                if cursor.accept(line):
+                    yield line
+        except NotConfiguredError as error:
+            raise ApplicationsNotConfiguredError.from_error(error) from None
+        finally:
+            await stream.aclose()
 
     async def wait_until_ready(self, name: str, *, timeout: float = 600.0,
                          poll_interval: float = 3.0, generation: int | None = None) -> Application:

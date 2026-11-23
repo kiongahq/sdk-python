@@ -38,7 +38,8 @@ The base URL comes from the argument, then `KIONGA_URL`, then
 request goes through `_send`. It retries what `RetryPolicy` allows, and raises a
 `KiongaAPIError` subclass for an error status. `_request` returns the JSON body, or
 `None` for an empty one, and `_page` unwraps the `items` array of list endpoints.
-`_stream` reads server-sent events and reconnects with `Last-Event-ID`.
+`_stream` reads server-sent events and reconnects with `Last-Event-ID`; callers can
+map the id (`resume`) and watch each connection open (`on_connect`).
 
 ### `kionga/client.py`, `teams.py`, `data.py`, `sse.py`, `errors.py`, `retry.py`
 
@@ -56,6 +57,22 @@ so `update_application` reads it, merges the changes and writes it back. Every
 applications call turns the gateway's `not_configured` answer into
 `ApplicationsNotConfiguredError`, because applications exist only on Kubernetes
 installs; it keeps the status error class, so `ConflictError` handlers still catch it.
+
+Followed logs (`follow_application_logs`) ride on `_stream`. The gateway ends a log
+stream after `max_seconds` and, on resume, skips every line at or before the
+`Last-Event-ID` instant, so a plain resume could lose a line that shares the last
+instant. The client therefore resumes one nanosecond early (`rewind`) and
+`LogCursor` removes the replay: it counts, per pod, container and text, how many
+lines it already delivered at the newest instant and skips that many on the next
+connection. Nothing is deduplicated by text alone, so identical lines all arrive.
+A line older than the newest instant inside one connection is delivered, because
+pods stream concurrently and their clocks differ. Limits that remain: a line the
+gateway never sent before the connection broke and whose instant is earlier than
+the newest one seen cannot be recovered, because the protocol resumes from one
+timestamp, and lines with no kubelet timestamp carry no id and are not resumable.
+`end` with a `max_seconds` reason reopens the stream; any other reason ends the
+iterator and goes to `on_end`. `LogCursor`, `rewind` and `instant` are pure and
+tested directly.
 
 `cli.py` is the `kionga` console script (and `python -m kionga`): argparse
 subcommands under `kionga apps`, built on `KiongaClient`. `main` takes a

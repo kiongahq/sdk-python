@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from kionga import KiongaClient
+from kionga import KiongaClient, Scaling
 
 DESIGN = {"id": "agd-1", "project_id": "prj-1", "name": "Support", "description": "", "revision": 3,
           "nodes": [{"id": "input", "kind": "input", "name": "In"}, {"id": "output", "kind": "output", "name": "Out"}],
@@ -125,3 +125,26 @@ def test_approvals_reviews_versions_and_operations():
     assert seen[1][3] == {"decision": "approve", "comment": "ok"}
     assert seen[2][1] == "/api/v1/agent-evaluations/age-1/cases/case%20one/review" or seen[2][1].endswith("/cases/case one/review")
     assert seen[4][2] == {"hours": "6"}
+
+
+def test_deploy_agent_version_sends_the_scaling_rule_and_validates_it():
+    seen = []
+
+    def route(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(202, json={"id": "agt-1"})
+
+    with client_for(route) as client:
+        client.deploy_agent_version("agv-1", min_replicas=1, max_replicas=4,
+                                    scaling={"metric": "cpu", "target": 70})
+        client.deploy_agent_version("agv-1", scaling=Scaling(metric="requests", target=10000))
+        client.deploy_agent_version("agv-1", scaling={"metric": "requests"})
+        client.deploy_agent_version("agv-1")
+        for bad in ({"metric": "cpu", "target": 101}, {"metric": "requests", "target": 10001},
+                    {"metric": "cpu", "target": -1}, {"metric": "memory", "target": 5}):
+            with pytest.raises(ValueError):
+                client.deploy_agent_version("agv-1", scaling=bad)
+    assert [body.get("scaling") for body in seen] == [
+        {"metric": "cpu", "target": 70}, {"metric": "requests", "target": 10000}, {"metric": "requests"}, None]
+    assert seen[0]["autoscaling"] == {"min_replicas": 1, "max_replicas": 4}
+    assert len(seen) == 4, "an invalid rule is refused before any request"
