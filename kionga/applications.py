@@ -288,56 +288,76 @@ def rewind(stamp: str) -> str:
     return _before(at)
 
 
+# A reconnect resumes this far before the newest instant delivered, so a line a slower
+# pod had not yet sent when the connection broke is still recovered. The overlap is
+# resent and removed again by ``LogCursor``.
+RESUME_OVERLAP_NS = 5_000_000_000
+
+
 class LogCursor:
     """Decides which lines of a followed stream are new, across reconnects.
 
-    A line is identified by its instant, pod, container and text. A reconnect
-    resumes one nanosecond before the newest instant delivered, so the gateway
-    resends exactly the lines at that instant (``carry_at``) and everything later,
-    which was never delivered. The cursor counts how many of each line it had
-    delivered at ``carry_at`` and skips that many of the resend, wherever in the
-    new connection they arrive, even after a newer line from another pod. Identical
-    lines, from one pod or several, are delivered as many times as they occurred:
-    nothing is deduplicated by text alone. A line older than the newest instant is
-    out of order within one connection, not a replay, and is delivered. State is
-    bounded by the lines at one instant. Call ``connected`` whenever a connection opens.
+    A line is identified by its instant, pod, container and text. The gateway
+    resumes from a single instant, but pods stream concurrently, so a reconnect
+    resumes ``RESUME_OVERLAP_NS`` before the newest instant delivered (``resume``):
+    a line a slower pod had not yet sent is recovered, and the gateway resends the
+    lines already delivered in that window. The cursor counts, per instant, pod,
+    container and text, how many it delivered in the window and skips that many of the
+    resend wherever in the new connection they arrive. Identical lines, from one pod
+    or several, are delivered as many times as they occurred: nothing is deduplicated
+    by text alone. State is bounded by the lines in the window. Call ``connected``
+    whenever a connection opens.
 
-    A line with no instant (the gateway's own "log stream unavailable" notice) can't
-    be placed, so it is delivered each time it is sent.
+    Not recoverable: a line the gateway sent later than the window after a newer
+    line, and a line with no instant (the gateway's own "log stream unavailable"
+    notice), which can't be placed and is delivered each time it is sent.
     """
 
     def __init__(self) -> None:
-        self.newest: tuple[int, int] | None = None
-        self._at_newest: Counter[tuple[str, str, str]] = Counter()
-        self._carry_at: tuple[int, int] | None = None
-        self._carry: Counter[tuple[str, str, str]] = Counter()
-        self._replayed: Counter[tuple[str, str, str]] = Counter()
+        self.newest: int | None = None  # nanoseconds since the epoch
+        self._delivered: Counter[tuple[int, str, str, str]] = Counter()
+        self._carry: Counter[tuple[int, str, str, str]] = Counter()
+        self._replayed: Counter[tuple[int, str, str, str]] = Counter()
+        self._floor: int | None = None
+        self._limit = 1024
+
+    def _window_start(self) -> int | None:
+        return None if self.newest is None else max(self.newest - RESUME_OVERLAP_NS, 0)
+
+    def _prune(self) -> None:
+        start = self._window_start()
+        self._delivered = Counter({k: n for k, n in self._delivered.items() if start is None or k[0] >= start})
+        self._limit = max(1024, 2 * len(self._delivered))
 
     def connected(self) -> None:
-        self._carry_at, self._carry = self.newest, Counter(self._at_newest)
+        self._prune()
+        self._floor = self._window_start()
+        self._carry = Counter(self._delivered)
         self._replayed = Counter()
 
     def resume(self, last_id: str) -> str:
-        """The ``Last-Event-ID`` to reconnect with: one nanosecond before the newest
-        instant delivered, not before the last event's, because pods interleave and
-        the last event can be older than the newest."""
-        if self.newest is None or self.newest[0] * 1_000_000_000 + self.newest[1] < 1:
+        """The ``Last-Event-ID`` to reconnect with: just before the start of the window."""
+        start = self._window_start()
+        if start is None or start < 1:
             return last_id
-        return _before(self.newest)
+        return _before((start // 1_000_000_000, start % 1_000_000_000))
 
     def accept(self, line: ApplicationLogLine) -> bool:
-        at = instant(line.time) if line.time else None
-        if at is None:
+        parsed = instant(line.time) if line.time else None
+        if parsed is None:
             return True  # no instant to order or resume by
-        key = (line.pod, line.container, line.line)
-        if at == self._carry_at:
+        at = parsed[0] * 1_000_000_000 + parsed[1]
+        key = (at, line.pod, line.container, line.line)
+        if self._floor is not None and at >= self._floor:
             self._replayed[key] += 1
             if self._replayed[key] <= self._carry[key]:
                 return False  # the gateway resent a line already delivered
         if self.newest is None or at > self.newest:
-            self.newest, self._at_newest = at, Counter()
-        if at == self.newest:
-            self._at_newest[key] += 1
+            self.newest = at
+        if at >= (self._window_start() or 0):
+            self._delivered[key] += 1
+            if len(self._delivered) > self._limit:
+                self._prune()
         return True
 
 

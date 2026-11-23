@@ -220,7 +220,7 @@ def test_logs_follow_streams_lines_until_the_pods_finish(capsys):
     assert out == "[billing-0] started\n[billing-1] up\n[billing-0] ready\n"
     assert err == "kionga: log stream ended: all pod log streams closed\n"
     assert seen[0].url.params["follow"] == "true" and seen[0].url.params["tail"] == "5"
-    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T10:00:00.199999999Z"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:55.199999999Z"
 
 
 def test_logs_since_takes_a_timestamp_or_a_duration(capsys):

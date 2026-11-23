@@ -191,8 +191,10 @@ gateway's Server-Sent Events stream, as a generator on `KiongaClient` and an asy
 iterator on `AsyncKiongaClient`. It starts with the last `tail` lines of each pod
 (1 to 2000, default 200), or the lines after `since` (an RFC 3339 time or a
 timezone-aware `datetime`). The gateway follows at most 20 pods and closes a stream
-after `max_seconds` (1 to 3600, default 600); the client reopens it from the last
-line it delivered, so a long follow has no gaps and no repeats. Identical lines are
+after `max_seconds` (1 to 3600, default 600); the client reopens it from five
+seconds before the newest line it delivered, so a slower pod's late line is still
+caught and the resend is dropped: no repeats, and a line is lost only if the gateway
+delivers it more than five seconds late. Identical lines are
 never merged: two pods logging the same text, or one pod logging it twice in the
 same instant, each arrive. The gateway's own "log stream unavailable" notices carry
 no timestamp, so they can't be placed and arrive every time they are sent. A dropped connection is retried with the client's

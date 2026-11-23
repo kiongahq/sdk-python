@@ -181,9 +181,10 @@ class ApplicationsAPI:
         Starts with the last ``tail`` lines (1 to 2000, default 200) of each pod, or
         with the lines after ``since`` (an RFC 3339 timestamp or a timezone-aware
         datetime). The gateway streams at most 20 pods and closes the stream after
-        ``max_seconds`` (1 to 3600, default 600); this reopens it from the last line
-        delivered, so a long follow has no gaps and no repeats, and identical lines
-        are all delivered. Dropped connections are retried with the client's policy.
+        ``max_seconds`` (1 to 3600, default 600); this reopens it from five seconds
+        before the newest line delivered and drops the resend, so a long follow has no
+        repeats, identical lines are all delivered, and a line is lost only if the
+        gateway delivers it more than five seconds late. Dropped connections are retried with the client's policy.
 
         The iterator ends when the pods' logs finish (no pods are running, or every
         log stream closed, such as after a rollout); ``on_end`` then receives the

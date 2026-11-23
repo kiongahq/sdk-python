@@ -105,7 +105,7 @@ def test_a_stream_closed_at_its_time_limit_resumes_from_the_last_line_without_re
                       sse(log(f"{T}.300Z", "c"), DONE)])
     assert lines(c) == [("billing-0", "a"), ("billing-0", "b"), ("billing-0", "c")]
     assert len(seen) == 2 and c.slept == []
-    assert seen[1].headers["Last-Event-ID"] == f"{T}.199999999Z"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:55.199999999Z"
 
 
 def test_a_server_that_repeats_the_last_instant_does_not_cause_duplicates():
@@ -132,22 +132,31 @@ def test_a_line_that_arrives_out_of_order_within_a_connection_is_still_delivered
     assert lines(c) == [("a", "from-a"), ("b", "from-b")]
 
 
-def test_a_reconnect_after_out_of_order_lines_resumes_from_the_newest_instant_without_repeats():
-    # Pod a is ahead of pod b when the connection ends. The resume point is the newest
-    # instant (10s), not the last event's (9s), so b's line is not sent a second time.
-    c, seen = client([sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"),
-                          log("2026-11-24T10:00:09Z", "from-b", pod="b"), SLICE),
-                      sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"),
+def test_a_line_a_slower_pod_had_not_sent_when_the_connection_broke_is_recovered_once():
+    # Pod a's 10s line was delivered; pod b's 9s line was still in flight. The reconnect
+    # resumes five seconds before the newest instant, so the gateway sends b's line and
+    # repeats a's, and the client delivers b's and drops the repeat.
+    c, seen = client([sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"), SLICE),
+                      sse(log("2026-11-24T10:00:09Z", "from-b", pod="b"),
+                          log("2026-11-24T10:00:10Z", "from-a", pod="a"),
                           log("2026-11-24T10:00:11Z", "next", pod="b"), DONE)])
     assert lines(c) == [("a", "from-a"), ("b", "from-b"), ("b", "next")]
-    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T10:00:09.999999999Z"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T10:00:04.999999999Z"
+
+
+def test_a_reconnect_after_out_of_order_lines_does_not_repeat_the_older_one():
+    c, _ = client([sse(log("2026-11-24T10:00:10Z", "from-a", pod="a"),
+                       log("2026-11-24T10:00:09Z", "from-b", pod="b"), SLICE),
+                   sse(log("2026-11-24T10:00:09Z", "from-b", pod="b"),
+                       log("2026-11-24T10:00:10Z", "from-a", pod="a"), DONE)])
+    assert lines(c) == [("a", "from-a"), ("b", "from-b")]
 
 
 def test_lines_without_a_time_are_delivered_and_do_not_move_the_resume_point():
     c, seen = client([sse(log("", "no stamp"), log(f"{T}Z", "stamped"), log("", "no stamp"), SLICE),
                       sse(DONE)])
     assert lines(c) == [("billing-0", "no stamp"), ("billing-0", "stamped"), ("billing-0", "no stamp")]
-    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:59.999999999Z"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:54.999999999Z"
 
 
 def test_a_dropped_connection_is_retried_with_backoff_and_resumes_after_the_last_line():
@@ -155,7 +164,7 @@ def test_a_dropped_connection_is_retried_with_backoff_and_resumes_after_the_last
                       sse(log(f"{T}.2Z", "b"), DONE)])
     assert lines(c) == [("billing-0", "a"), ("billing-0", "b")]
     assert len(seen) == 3 and len(c.slept) == 1
-    assert seen[2].headers["Last-Event-ID"] == f"{T}.099999999Z"
+    assert seen[2].headers["Last-Event-ID"] == "2026-11-24T09:59:55.099999999Z"
 
 
 def test_a_stream_that_never_connects_gives_up_after_the_policy():
@@ -247,12 +256,13 @@ def test_a_replay_that_arrives_after_a_newer_line_from_another_pod_is_still_skip
     assert lines(c) == [("a", "x"), ("b", "y"), ("a", "x")]
 
 
-def test_the_cursors_memory_is_bounded_by_one_instant():
+def test_the_cursors_memory_is_bounded_by_the_resume_window():
     cursor = LogCursor()
     cursor.connected()
-    for n in range(2000):
-        assert cursor.accept(ApplicationLogLine(pod="p", time=f"{T}.{n + 1:09d}Z", line="same"))
-    assert sum(cursor._at_newest.values()) == 1 and len(cursor._carry) == 0
+    for second in range(1, 20001):
+        stamp = f"1970-01-01T{second // 3600:02d}:{second % 3600 // 60:02d}:{second % 60:02d}Z"
+        assert cursor.accept(ApplicationLogLine(pod="p", time=stamp, line="same"))
+    assert len(cursor._delivered) < 2500, "pruned to the window, not one entry per line"
 
 
 def test_the_cursor_counts_replays_per_connection():
@@ -297,7 +307,7 @@ def test_against_a_local_server_the_stream_resumes_across_a_closed_connection():
         server.server_close()
         thread.join(5)
     assert requests[0] == (f"{PATH}?follow=true&tail=10", None)
-    assert requests[1][1] == f"{T}.199999999Z"
+    assert requests[1][1] == "2026-11-24T09:59:55.199999999Z"
 
 
 # The same behaviour, awaited.
@@ -316,7 +326,7 @@ async def test_the_async_client_follows_resumes_and_ends():
         reasons = []
         got = [e.line async for e in c.follow_application_logs("billing", on_end=reasons.append)]
     assert got == ["a", "a", "b"] and reasons == ["all pod log streams closed"]
-    assert seen[1].headers["Last-Event-ID"] == f"{T}.099999999Z"
+    assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:55.099999999Z"
 
 
 @pytest.mark.asyncio
