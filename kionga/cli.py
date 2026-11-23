@@ -2,7 +2,7 @@
 
     kionga apps deploy billing --project p-1 --image ghcr.io/acme/billing:1.4 --wait
     kionga apps list
-    kionga apps logs billing --follow
+    kionga apps logs billing --tail 50
 
 It reads the gateway address from ``KIONGA_URL`` and the API key from
 ``KIONGA_TOKEN``, like ``KiongaClient``. Errors print as ``kionga: <reason>`` and
@@ -45,7 +45,7 @@ def parser() -> argparse.ArgumentParser:
     deploy.set_defaults(run=apps_deploy)
 
     update = app_commands.add_parser("update", help="change an application's settings")
-    update.add_argument("application", help="application id or name")
+    update.add_argument("application", help="application name")
     _spec_arguments(update, create=False)
     _wait_arguments(update)
     update.set_defaults(run=apps_update)
@@ -62,8 +62,8 @@ def parser() -> argparse.ArgumentParser:
 
     logs = app_commands.add_parser("logs", help="print an application's logs")
     logs.add_argument("application")
-    logs.add_argument("-f", "--follow", action="store_true", help="keep printing new lines")
-    logs.add_argument("--tail", type=_non_negative, default=0, help="lines per replica")
+    logs.add_argument("--tail", type=int, default=None, help="lines per pod, 1 to 2000 (default 200)")
+    logs.add_argument("--container", default="", help="container name (default: each pod's first)")
     logs.set_defaults(run=apps_logs)
 
     events = app_commands.add_parser("events", help="print an application's Kubernetes events")
@@ -90,21 +90,20 @@ def _spec_arguments(command: argparse.ArgumentParser, *, create: bool) -> None:
     command.add_argument("--ref", default="", help="branch, tag or commit to build (with --git)")
     command.add_argument("--context-dir", default="", help="build context inside the repository")
     command.add_argument("--dockerfile", default="", help="Dockerfile path inside the context")
-    default = (lambda value: value) if create else (lambda value: None)
-    command.add_argument("--port", type=int, default=default(8080), help="port the container listens on")
+    command.add_argument("--port", type=int, default=None, help="port the container listens on (default 8080)")
     command.add_argument("--env", action="append", metavar="KEY=VALUE", help="environment variable; repeat")
     command.add_argument("--secret", action="append", dest="secrets", metavar="NAME",
-                         help="Kionga secret to expose as environment; repeat")
+                         help="Kubernetes secret to expose as environment; repeat")
     command.add_argument("--cpu", help="CPU request, for example 500m")
     command.add_argument("--memory", help="memory request, for example 512Mi")
-    command.add_argument("--min-replicas", type=_non_negative, default=default(1),
-                         help="0 scales to zero when idle")
-    command.add_argument("--max-replicas", type=int, default=None)
+    command.add_argument("--min-replicas", type=_non_negative, default=None,
+                         help="0 scales to zero when idle (default 1)")
+    command.add_argument("--max-replicas", type=int, default=None, help="default 3")
     command.add_argument("--scale-on", choices=SCALING_METRICS, help="autoscaling trigger")
     command.add_argument("--target", type=int, help="requests per replica, or CPU percent")
-    command.add_argument("--health-path", default=default("/"), help="readiness and liveness path")
-    command.add_argument("--visibility", choices=VISIBILITIES, default=default("sso"),
-                         help="sso keeps it behind Kionga sign-in")
+    command.add_argument("--health-path", default=None, help="readiness and liveness path (default /)")
+    command.add_argument("--visibility", choices=VISIBILITIES, default=None,
+                         help="sso (default) keeps it behind Kionga sign-in")
 
 
 def _wait_arguments(command: argparse.ArgumentParser) -> None:
@@ -175,12 +174,11 @@ def apps_get(client: Any, args: argparse.Namespace) -> None:
 
 
 def apps_logs(client: Any, args: argparse.Namespace) -> None:
-    if args.follow:
-        for line in client.stream_application_logs(args.application, tail=args.tail):
-            _print_log(line)
-        return
-    for line in client.application_logs(args.application, tail=args.tail):
-        _print_log(line)
+    for pod in client.application_logs(args.application, tail=args.tail, container=args.container):
+        for message in pod.messages:
+            print(f"[{pod.pod}] {message}")
+        if pod.error:
+            print(f"kionga: {pod.pod}: {pod.error}", file=sys.stderr)
 
 
 def apps_events(client: Any, args: argparse.Namespace) -> None:
@@ -209,7 +207,7 @@ def _finish(client: Any, args: argparse.Namespace, application: Application) -> 
     if args.wait:
         if not args.json:
             print(f"Waiting for {application.name} to be ready...", file=sys.stderr)
-        application = client.wait_until_ready(application.id, timeout=args.timeout,
+        application = client.wait_until_ready(application.name, timeout=args.timeout,
                                                generation=application.generation)
     if args.json:
         _print_json(application.model_dump(mode="json"))
@@ -221,7 +219,7 @@ def _describe(application: Application) -> None:
     status = application.status
     source = application.image or (application.source.git if application.source else "-")
     rows = [
-        ("Name", application.name), ("ID", application.id), ("Project", application.project_id or "-"),
+        ("Name", application.name), ("Project", application.project_id or "-"),
         ("Phase", status.phase or "-"), ("URL", status.url or "-"), ("Ready", _replicas(application)),
         ("Source", source), ("Visibility", application.visibility or "-"),
     ]
@@ -238,11 +236,6 @@ def _replicas(application: Application) -> str:
     maximum = application.replicas.get("max")
     ready = application.status.ready_replicas
     return f"{ready}/{maximum}" if maximum is not None else str(ready)
-
-
-def _print_log(line: Any) -> None:
-    prefix = f"[{line.pod}] " if line.pod else ""
-    print(f"{prefix}{line.message}", flush=True)
 
 
 def _print_json(value: Any) -> None:

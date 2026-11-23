@@ -48,13 +48,14 @@ helpers. So `KiongaClient` and `AsyncKiongaClient` return the same classes.
 
 ### `kionga/applications.py`, `kionga/_async/applications.py`, `kionga/cli.py`
 
-Applications (`/api/v1/applications`): `applications.py` holds the response models,
-`application_body` (validation and the request body for create and update),
-`failure_reason` and the errors; the async mixin holds the methods, generated into
-`_sync` like the rest of the client. Every applications call turns the gateway's
-`not_configured` answer into `ApplicationsNotConfiguredError`, because applications
-exist only on Kubernetes installs. The model parses the status nested, flattened or
-as a bare phase, until the gateway contract is final.
+Applications (`/api/v1/applications/{name}`): `applications.py` holds the response
+models, `application_body` (validation and the request body), `failure_reason` and
+the errors; the async mixin holds the methods, generated into `_sync` like the rest
+of the client. The gateway replaces an application's whole configuration on `PUT`,
+so `update_application` reads it, merges the changes and writes it back. Every
+applications call turns the gateway's `not_configured` answer into
+`ApplicationsNotConfiguredError`, because applications exist only on Kubernetes
+installs; it keeps the status error class, so `ConflictError` handlers still catch it.
 
 `cli.py` is the `kionga` console script (and `python -m kionga`): argparse
 subcommands under `kionga apps`, built on `KiongaClient`. `main` takes a

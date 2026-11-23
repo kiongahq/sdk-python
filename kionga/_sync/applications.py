@@ -1,28 +1,24 @@
 # Generated from kionga/_async by scripts/unasync.py. Do not edit.
 from __future__ import annotations
 
-import json
 import time
-from collections.abc import Iterator
-from datetime import datetime
 from typing import Any
 
 from ..applications import (
+    MAX_LOG_TAIL,
     Application,
     ApplicationEvent,
     ApplicationFailed,
-    ApplicationLogLine,
+    ApplicationPodLogs,
     ApplicationsNotConfiguredError,
     ApplicationTimeout,
     GitSource,
-    LogReplayFilter,
     Scaling,
     application_body,
     failure_reason,
 )
-from ..data import _items, _name, _rfc3339
+from ..data import _items, _name
 from ..errors import NotConfiguredError
-from ..sse import StreamError
 
 __all__ = ["ApplicationsAPI"]
 
@@ -30,15 +26,14 @@ BASE = "/api/v1/applications"
 
 
 class ApplicationsAPI:
-    """Application methods. Needs ``_request``, ``_send``, ``_stream`` and ``_sleep`` from the client.
+    """Application methods. Needs ``_request`` and ``_sleep`` from the client.
 
-    Every method raises ``ApplicationsNotConfiguredError`` on an install without
-    applications (Compose, or Kubernetes without them enabled).
+    Applications are addressed by name. Every method raises
+    ``ApplicationsNotConfiguredError`` on an install without applications
+    (Compose, or Kubernetes without a base domain).
     """
 
     _request: Any
-    _send: Any
-    _stream: Any
     _sleep: Any
 
     def create_application(
@@ -48,23 +43,26 @@ class ApplicationsAPI:
         *,
         image: str | None = None,
         source: GitSource | dict[str, Any] | None = None,
-        port: int = 8080,
+        port: int | None = None,
         env: dict[str, str] | None = None,
         secret_refs: list[str] | None = None,
         cpu: str | None = None,
         memory: str | None = None,
-        min_replicas: int = 1,
+        min_replicas: int | None = None,
         max_replicas: int | None = None,
         scaling: Scaling | dict[str, Any] | None = None,
-        health_path: str = "/",
-        visibility: str = "sso",
+        health_path: str | None = None,
+        visibility: str | None = None,
     ) -> Application:
         """Deploy a service from ``image``, or from ``source`` (a Git repository Kionga builds).
 
         It is served at ``https://<name>.<install domain>``. ``min_replicas=0`` scales it
-        to zero when idle; ``scaling`` chooses ``requests`` or ``cpu`` as the trigger.
+        to zero when idle (with ``requests`` scaling); ``scaling`` chooses ``requests``
+        (concurrent requests per replica) or ``cpu`` (utilisation percent).
         ``visibility="sso"`` keeps it behind Kionga sign-in; ``"public"`` opens it.
-        ``secret_refs`` name Kionga secrets exposed to the container as environment.
+        ``secret_refs`` name Kubernetes secrets exposed to the container as environment.
+        Fields left out take the gateway's defaults: port 8080, 250m CPU, 256Mi
+        memory, 1 to 3 replicas, requests scaling, health path ``/``, ``sso``.
         Raises ``ValueError`` for an invalid field before sending anything.
         """
         body = application_body(
@@ -80,12 +78,13 @@ class ApplicationsAPI:
         body = self._apps("GET", BASE, params=params)
         return [Application.model_validate(item) for item in _items(body)]
 
-    def get_application(self, application_id: str) -> Application:
-        return Application.model_validate(self._apps("GET", f"{BASE}/{_name(application_id)}"))
+    def get_application(self, name: str) -> Application:
+        """One application with its live status, URL, conditions and last build."""
+        return Application.model_validate(self._apps("GET", f"{BASE}/{_name(name)}"))
 
     def update_application(
         self,
-        application_id: str,
+        name: str,
         *,
         image: str | None = None,
         source: GitSource | dict[str, Any] | None = None,
@@ -100,85 +99,86 @@ class ApplicationsAPI:
         health_path: str | None = None,
         visibility: str | None = None,
     ) -> Application:
-        """Change only the fields given; the rest stay as they are. Rolls the application."""
+        """Change the fields given and keep the rest; the operator rolls it out.
+
+        The gateway replaces the whole configuration, so this reads the current one,
+        applies your changes and sends the result. A change someone saves between
+        the read and the write is overwritten. Giving ``image`` drops a Git
+        ``source`` and the reverse. ``env`` and ``secret_refs`` replace the lists.
+        """
+        current = self.get_application(name)
+        merged = current.request()
+        resources = dict(merged.get("resources") or {})
+        replicas = dict(merged.get("replicas") or {})
+        changes = {"port": port, "env": env, "secret_refs": secret_refs, "health_path": health_path,
+                   "visibility": visibility, "scaling": scaling}
+        if not any(value is not None for value in (image, source, cpu, memory, min_replicas, max_replicas,
+                                                   *changes.values())):
+            raise ValueError("nothing to update")
+        if image and source is not None:
+            raise ValueError("give image or source, not both")
+        if image:
+            merged.pop("source", None)
+            merged["image"] = image
+        if source is not None:
+            merged.pop("image", None)
+            merged["source"] = source
+        merged.update({key: value for key, value in changes.items() if value is not None})
         body = application_body(
-            image=image, source=source, port=port, env=env, secret_refs=secret_refs, cpu=cpu,
-            memory=memory, min_replicas=min_replicas, max_replicas=max_replicas,
-            scaling=scaling, health_path=health_path, visibility=visibility, partial=True,
+            project_id=merged.get("project_id") or None, name=current.name, image=merged.get("image"),
+            source=merged.get("source"), port=merged.get("port"), env=merged.get("env"),
+            secret_refs=merged.get("secret_refs"), cpu=cpu or resources.get("cpu"),
+            memory=memory or resources.get("memory"),
+            min_replicas=replicas.get("min") if min_replicas is None else min_replicas,
+            max_replicas=replicas.get("max") if max_replicas is None else max_replicas,
+            scaling=merged.get("scaling"), health_path=merged.get("health_path"),
+            visibility=merged.get("visibility"),
         )
-        return Application.model_validate(
-            self._apps("PATCH", f"{BASE}/{_name(application_id)}", json=body))
+        return Application.model_validate(self._apps("PUT", f"{BASE}/{_name(name)}", json=body))
 
-    def delete_application(self, application_id: str) -> None:
+    def delete_application(self, name: str) -> None:
         """Delete the application, its workload and its host name."""
-        self._apps("DELETE", f"{BASE}/{_name(application_id)}")
+        self._apps("DELETE", f"{BASE}/{_name(name)}")
 
-    def redeploy_application(self, application_id: str) -> Application:
-        """Roll the application again: rebuild a Git source, re-pull an image tag."""
-        return Application.model_validate(
-            self._apps("POST", f"{BASE}/{_name(application_id)}/redeploy", json={}))
+    def redeploy_application(self, name: str) -> Application:
+        """Restart the application's pods, and rebuild a Git source."""
+        return Application.model_validate(self._apps("POST", f"{BASE}/{_name(name)}/redeploy", json={}))
 
-    def application_events(self, application_id: str) -> list[ApplicationEvent]:
-        """Kubernetes events for the application, oldest first."""
-        body = self._apps("GET", f"{BASE}/{_name(application_id)}/events")
+    def application_events(self, name: str) -> list[ApplicationEvent]:
+        """Kubernetes events for the application, its pods and replica sets, newest first."""
+        body = self._apps("GET", f"{BASE}/{_name(name)}/events")
         return [ApplicationEvent.model_validate(item) for item in _items(body)]
 
-    def application_logs(self, application_id: str, *, tail: int = 0,
-                         since: datetime | None = None) -> list[ApplicationLogLine]:
-        """Recent log lines from every replica. ``tail`` limits the count per replica."""
-        if tail < 0:
-            raise ValueError("tail can't be negative")
-        params = {k: v for k, v in {"tail": str(tail) if tail else "", "since": _rfc3339(since)}.items() if v}
-        response = self._apps_send("GET", f"{BASE}/{_name(application_id)}/logs",
-                                   params=params or None)
-        if response.status_code == 204 or not response.content:
-            return []
-        if "json" in response.headers.get("content-type", ""):
-            return [ApplicationLogLine.model_validate(item) for item in _items(response.json())]
-        return [ApplicationLogLine(message=line) for line in response.text.splitlines()]
+    def application_logs(self, name: str, *, tail: int | None = None,
+                         container: str = "") -> list[ApplicationPodLogs]:
+        """Recent logs of each pod: the last ``tail`` lines (1 to 2000; the gateway
+        defaults to 200) of ``container``, or of each pod's first container."""
+        params: dict[str, str] = {}
+        if tail is not None:
+            if not 1 <= tail <= MAX_LOG_TAIL:
+                raise ValueError(f"tail must be 1 to {MAX_LOG_TAIL}")
+            params["tail"] = str(tail)
+        if container:
+            params["container"] = container
+        body = self._apps("GET", f"{BASE}/{_name(name)}/logs", params=params or None)
+        return [ApplicationPodLogs.model_validate(item) for item in _items(body)]
 
-    def stream_application_logs(self, application_id: str, *, tail: int = 0) -> Iterator[ApplicationLogLine]:
-        """Yield log lines as they are written, over server-sent events, until you stop
-        iterating.
-
-        If the connection drops it reconnects from the last line's timestamp
-        (``since``) and skips the lines the gateway sends again, or with ``tail=0``
-        when lines carry no timestamp. In that second case lines written while it
-        was disconnected are lost.
-        """
-        replay = LogReplayFilter()
-        params = {"follow": "true", **({"tail": str(tail)} if tail else {})}
-        path = f"{BASE}/{_name(application_id)}/logs/stream"
-        try:
-            for message in self._stream(path, params=params, resume=replay.resume_params):
-                if message.event == "end":
-                    return
-                if message.event == "error":
-                    raise StreamError(f"application log stream: {message.data}")
-                for item in _log_items(message.data):
-                    line = ApplicationLogLine.model_validate(item)
-                    if replay.accept(line):
-                        yield line
-        except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError.from_error(error) from None
-
-    def wait_until_ready(self, application_id: str, *, timeout: float = 600.0,
+    def wait_until_ready(self, name: str, *, timeout: float = 600.0,
                          poll_interval: float = 3.0, generation: int | None = None) -> Application:
         """Poll until the application is ready, and return it.
-
-        After an update or redeploy, pass the ``generation`` of the application it
-        returned, so a status left over from the previous rollout is not taken as
-        ready. ``Application.ready`` already ignores a status whose
-        ``observed_generation`` is behind the application's ``generation``.
 
         Raises ``ApplicationFailed`` as soon as it fails, with the reason from its
         status, or from its latest warning event. Raises ``ApplicationTimeout`` when
         it is still starting after ``timeout`` seconds, with the latest reason known,
         such as an image that can't be pulled.
+
+        After an update or redeploy, pass the ``generation`` it returned so the
+        previous rollout's status is not taken as ready. That needs the gateway to
+        report generations; without them the phase decides.
         """
         deadline = time.monotonic() + timeout
         while True:
-            application = self.get_application(application_id)
+            application = self.get_application(name)
             if application.ready and _caught_up(application, generation):
                 return application
             if application.failed:
@@ -192,7 +192,7 @@ class ApplicationsAPI:
         if reason:
             return reason
         try:
-            events = self.application_events(application.id)
+            events = self.application_events(application.name)
         except Exception:  # the reason is a courtesy; never hide the real error with it
             return ""
         return failure_reason(application, events)
@@ -202,23 +202,6 @@ class ApplicationsAPI:
             return self._request(method, path, **kwargs)
         except NotConfiguredError as error:
             raise ApplicationsNotConfiguredError.from_error(error) from None
-
-    def _apps_send(self, method: str, path: str, **kwargs: Any) -> Any:
-        try:
-            return self._send(method, path, **kwargs)
-        except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError.from_error(error) from None
-
-
-def _log_items(data: str) -> list[Any]:
-    try:
-        value = json.loads(data)
-    except ValueError:
-        return [line for line in data.splitlines() if line]
-    if isinstance(value, dict) and "items" in value:
-        value = value["items"] or []
-    items = value if isinstance(value, list) else [value]
-    return [item if isinstance(item, (dict, str)) else str(item) for item in items]
 
 
 def _caught_up(application: Application, generation: int | None) -> bool:
@@ -230,4 +213,3 @@ def _caught_up(application: Application, generation: int | None) -> bool:
     # A gateway that reports no generation can't tell rollouts apart: fall back to
     # the phase rather than waiting until the timeout.
     return observed is None or observed >= generation
-

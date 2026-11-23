@@ -118,9 +118,10 @@ instead of polling, and ends with the run.
 ### Applications
 
 Applications are your own services, run by Kionga as Kubernetes workloads and
-served at `https://<name>.<install domain>`. They need a Kubernetes install: on a
-Compose install every applications call raises `ApplicationsNotConfiguredError`,
-which says so and carries the gateway's enablement steps.
+served at `https://<name>.<install domain>`. An application is addressed by its
+name. They need a Kubernetes install: on a Compose install every applications call
+raises `ApplicationsNotConfiguredError`, which says so and lists the gateway's
+enablement steps (`error.steps`).
 
 ```python
 from kionga import ApplicationFailed, ApplicationTimeout, KiongaClient
@@ -135,25 +136,28 @@ with KiongaClient() as client:
         health_path="/healthz", visibility="sso",  # "public" skips Kionga sign-in
     )
     try:
-        app = client.wait_until_ready(app.id, timeout=600)
+        app = client.wait_until_ready(app.name, timeout=600)
         print(app.url)
     except ApplicationFailed as error:              # failed: reason from status or events
         print(error.reason)
     except ApplicationTimeout as error:             # still starting: last known reason
         print(error.application.phase, error.reason)
-    client.update_application(app.id, image="ghcr.io/acme/billing:1.5")
-    for line in client.application_logs(app.id, tail=100):
-        print(line.pod, line.message)
+    client.update_application(app.name, image="ghcr.io/acme/billing:1.5")
+    for pod in client.application_logs(app.name, tail=100):
+        for line in pod.messages:
+            print(pod.pod, line)
 ```
 
+Fields left out take the gateway's defaults: port 8080, 250m CPU and 256Mi memory,
+1 to 3 replicas, `requests` scaling, health path `/` and `sso`. Scale to zero needs
+`requests` scaling. `update_application` changes the fields you pass and keeps the
+rest: the gateway replaces the whole configuration, so it reads the current one
+first, and a change someone saves between that read and the write is overwritten.
 Also `list_applications`, `get_application`, `redeploy_application`,
-`application_events`, `stream_application_logs` (follows new lines over
-server-sent events and resumes after a dropped connection without repeating lines)
-and `delete_application`. After `update_application` or `redeploy_application`,
-pass the returned `generation` to `wait_until_ready` so the previous rollout's
-status is not taken as ready. Invalid fields, such as a name that is
-not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError` before
-anything is sent.
+`application_events` (newest first) and `delete_application`. Logs are the recent
+lines of each pod; the gateway does not stream them. Invalid fields, such as a name
+that is not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError`
+before anything is sent.
 
 The `kionga` command does the same from a terminal (`python -m kionga` works too):
 
@@ -163,7 +167,7 @@ kionga apps deploy billing --project "$PROJECT" --image ghcr.io/acme/billing:1.4
   --scale-on requests --target 20 --health-path /healthz --wait
 kionga apps list
 kionga apps get billing --json
-kionga apps logs billing --follow
+kionga apps logs billing --tail 100
 kionga apps events billing
 kionga apps update billing --image ghcr.io/acme/billing:1.5 --wait
 kionga apps redeploy billing --wait
@@ -175,20 +179,22 @@ Errors print as `kionga: <reason>` and exit with status 1.
 ### Model and agent deployments
 
 `deploy_model(model_id, canary_weight=10)` returns as soon as the deployment is
-recorded. `deployment_status` is `pending` until the model server is up, then
-`serving` with `endpoint_url`, or `failed`. `wait_for_model_deployment` waits for
-that outcome and raises `ModelDeploymentFailed` (with `reason`) or
-`ModelDeploymentTimeout`:
+recorded. A weight of 1 to 99 serves this version beside the one already serving;
+0 or 100 replaces it. `model_deployment(model_id)` reads the live status:
+`pending`, then `serving` with `endpoint_url`, or `failed` with `message`.
+`wait_for_model_deployment` waits for that outcome and raises
+`ModelDeploymentFailed` (also when the version is stopped, retired or rolled back)
+or `ModelDeploymentTimeout`:
 
 ```python
-model = client.deploy_model(model_id, canary_weight=10)
-model = client.wait_for_model_deployment(model.id, timeout=600)
-print(model.endpoint_url, model.canary_weight)
+client.deploy_model(model_id, canary_weight=10)
+deployment = client.wait_for_model_deployment(model_id, timeout=600)
+print(deployment.endpoint_url, deployment.canary_weight)
 ```
 
-`deploy_agent` and `deploy_agent_version` take `scaling={"metric": "requests",
-"target": 10}` or `{"metric": "cpu", "target": 70}` to choose what drives
-autoscaling; `Agent.scaling` reports it.
+`deploy_agent` takes `scaling={"metric": "requests", "target": 10}` (concurrent
+requests per replica) or `{"metric": "cpu", "target": 70}` (utilisation percent)
+to choose what drives autoscaling; `Agent.scaling` reports it.
 
 ### Async
 

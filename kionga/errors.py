@@ -100,8 +100,17 @@ class NotConfiguredError(KiongaAPIError):
 
     The gateway uses 409 or 503 for it. The error raised also subclasses the class for
     its status (``ConflictError`` or ``ServerError``), so existing handlers keep
-    catching it. ``message`` carries the gateway's enablement steps.
+    catching it. ``message`` says what is missing and ``steps`` lists how to enable
+    it, when the gateway sends them.
     """
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(response)
+        try:
+            steps = response.json().get("steps")
+        except (ValueError, AttributeError):
+            steps = None
+        self.steps: list[str] = [str(step) for step in steps] if isinstance(steps, list) else []
 
 
 class _ConflictNotConfigured(NotConfiguredError, ConflictError):

@@ -1,7 +1,7 @@
 # Async source of truth. kionga/_sync is generated from this by scripts/unasync.py.
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -43,27 +43,20 @@ class StreamingAPI:
     _sleep: Any
 
     async def _stream(self, path: str, *, params: dict[str, Any] | None = None,
-                last_id: str = "", resume: Callable[[], dict[str, Any]] | None = None,
-                ) -> AsyncIterator[ServerSentEvent]:
+                last_id: str = "") -> AsyncIterator[ServerSentEvent]:
         """Yield events, reconnecting from the last id whenever the stream ends.
 
         Ends only when the caller stops iterating. Failures to connect use the
         client's retry policy; the count resets once a connection delivers events.
-        ``resume``, when given, supplies the query for every reconnect after a
-        connection that delivered events, for streams whose events carry no id to
-        resume from. Until then the original ``params`` are retried.
         """
         failures = 0
-        query, connected = params, False
         while True:
-            if connected and resume is not None:
-                query = resume()
             headers = {"Accept": "text/event-stream"}
             if last_id:
                 headers["Last-Event-ID"] = last_id
             delivered = False
             try:
-                async with self._client.stream("GET", path, params=query, headers=headers,
+                async with self._client.stream("GET", path, params=params, headers=headers,
                                          timeout=STREAM_TIMEOUT) as response:
                     if response.status_code >= 400:
                         await response.aread()
@@ -75,7 +68,7 @@ class StreamingAPI:
                         await self._sleep(self.retry.delay(failures, response))
                         continue
                     async for event in parse_events(response.aiter_lines()):
-                        delivered = connected = True
+                        delivered = True
                         if event.id:
                             last_id = event.id
                         yield event

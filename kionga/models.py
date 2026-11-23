@@ -1,6 +1,6 @@
-from datetime import datetime
+from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -101,21 +101,43 @@ class Function(BaseModel):
     updated_at: datetime | None = None
 
 
+SCALING_METRICS = ("requests", "cpu")
+# The gateway's limits: concurrent requests per replica, or CPU utilisation percent.
+SCALING_TARGETS = {"requests": (1, 10000), "cpu": (1, 100)}
+
+
 class Scaling(BaseModel):
-    """What drives autoscaling: ``requests`` (in-flight requests per replica, which
-    allows scale to zero) or ``cpu`` (percent of the CPU request)."""
+    """What drives autoscaling: ``requests`` (concurrent requests per replica, which
+    allows scale to zero) or ``cpu`` (utilisation percent of the CPU request).
+
+    A response may carry an empty metric (an agent deployed before scaling
+    existed); ``scaling_body`` validates what you send.
+    """
 
     model_config = ConfigDict(extra="allow")
 
-    metric: Literal["requests", "cpu"]
-    target: int = Field(gt=0)
+    metric: str = ""
+    target: int = 0
 
 
-# Deployment statuses. "serving" and "failed" are final for a deploy; the
-# others mean the deploy is still in progress. Older gateways report
-# "deploying" before "serving".
+def scaling_body(scaling: Scaling | dict | None) -> dict:
+    """``{"scaling": {...}}`` for a request, or ``{}``. Raises ``ValueError``."""
+    if scaling is None:
+        return {}
+    rule = scaling if isinstance(scaling, Scaling) else Scaling.model_validate(scaling)
+    if rule.metric not in SCALING_TARGETS:
+        raise ValueError(f"scaling metric must be one of {list(SCALING_METRICS)}")
+    low, high = SCALING_TARGETS[rule.metric]
+    if not low <= rule.target <= high:
+        raise ValueError(f"scaling target for {rule.metric} must be {low} to {high}")
+    return {"scaling": {"metric": rule.metric, "target": rule.target}}
+
+
+# Deployment statuses. "serving" means the endpoint answers; "failed" carries a
+# reason; "stopped", "retired" and "rolled_back" mean this version is no longer
+# being deployed. "pending" and the older "deploying" are in progress.
 MODEL_SERVING = frozenset({"serving"})
-MODEL_DEPLOY_FAILED = frozenset({"failed"})
+MODEL_DEPLOY_FAILED = frozenset({"failed", "stopped", "retired", "rolled_back"})
 
 
 class Model(BaseModel):
@@ -262,21 +284,50 @@ class AuditEvent(BaseModel):
     created_at: datetime
 
 
-class ModelDeploymentFailed(Exception):
-    """The model deployment failed. ``model`` is its last state and ``reason`` why."""
+class ModelDeployment(BaseModel):
+    """The live deployment of one model version (``GET /models/{id}/deployment``)."""
 
-    def __init__(self, model: Model, reason: str = "") -> None:
-        super().__init__(f"model {model.name} {model.version} failed to deploy: {reason or 'no reason given'}")
-        self.model = model
-        self.reason = reason
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    model_id: str
+    name: str = ""
+    version: str = ""
+    status: str = ""
+    endpoint_url: str | None = None
+    message: str = ""
+    canary_weight: int = 0
+
+    @classmethod
+    def from_model(cls, model: Model) -> ModelDeployment:
+        return cls(model_id=model.id, name=model.name, version=model.version,
+                   status=model.deployment_status, endpoint_url=model.endpoint_url,
+                   message=model.deployment_reason, canary_weight=model.canary_weight)
+
+    @property
+    def serving(self) -> bool:
+        return self.status in MODEL_SERVING
+
+    @property
+    def failed(self) -> bool:
+        return self.status in MODEL_DEPLOY_FAILED
+
+
+class ModelDeploymentFailed(Exception):
+    """The deployment failed or was stopped. ``deployment`` is its last state."""
+
+    def __init__(self, deployment: ModelDeployment) -> None:
+        reason = deployment.message or deployment.status
+        super().__init__(f"model {deployment.name} {deployment.version} did not deploy: {reason}")
+        self.deployment = deployment
+        self.reason = deployment.message
 
 
 class ModelDeploymentTimeout(TimeoutError):
     """The model was not serving when ``wait_for_model_deployment`` gave up."""
 
-    def __init__(self, model: Model, timeout: float) -> None:
-        reason = model.deployment_reason
-        text = f"model {model.name} {model.version} still {model.deployment_status or 'pending'} after {timeout:g}s"
-        super().__init__(f"{text}: {reason}" if reason else text)
-        self.model = model
-        self.reason = reason
+    def __init__(self, deployment: ModelDeployment, timeout: float) -> None:
+        text = (f"model {deployment.name} {deployment.version} still "
+                f"{deployment.status or 'pending'} after {timeout:g}s")
+        super().__init__(f"{text}: {deployment.message}" if deployment.message else text)
+        self.deployment = deployment
+        self.reason = deployment.message

@@ -15,9 +15,11 @@ from ..models import (
     Connection,
     Function,
     Model,
+    ModelDeployment,
     ModelDeploymentFailed,
     ModelDeploymentTimeout,
     Scaling,
+    scaling_body,
     PipelineRun,
     PipelineDefinition,
     Project,
@@ -25,7 +27,7 @@ from ..models import (
     Readiness,
     Tool,
 )
-from ..errors import KiongaConnectionError, KiongaTimeoutError, error_for_response
+from ..errors import KiongaConnectionError, KiongaTimeoutError, NotFoundError, error_for_response
 from ..retry import RetryPolicy
 from .applications import ApplicationsAPI
 from .data import DataAPI
@@ -237,12 +239,14 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
         raise LookupError(f"model {model_id} not found")
 
     def deploy_model(self, model_id: str, *, canary_weight: int = 0) -> Model:
-        """Start serving the model. ``canary_weight`` (0 to 100) is the percent of
-        traffic it takes from the version already serving; 0 replaces it.
+        """Start serving the model. ``canary_weight`` (1 to 99) sends that percent
+        of traffic to this version beside the version already serving; 0 or 100
+        replaces it. A canary needs a serving stable version.
 
-        The gateway answers once the deployment is recorded: ``deployment_status``
-        is ``pending`` until the server is up, then ``serving`` with ``endpoint_url``,
-        or ``failed``. Use ``wait_for_model_deployment`` to wait for the outcome.
+        On Kubernetes the gateway answers once the deployment is recorded:
+        ``deployment_status`` is ``pending`` until the server is up, then
+        ``serving`` with ``endpoint_url``, or ``failed`` with ``deployment_message``.
+        Use ``wait_for_model_deployment`` to wait for the outcome.
         """
         if not 0 <= canary_weight <= 100:
             raise ValueError("canary_weight must be 0 to 100")
@@ -254,23 +258,35 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
             )
         )
 
-    def wait_for_model_deployment(self, model_id: str, *, timeout: float = 600.0,
-                                  poll_interval: float = 3.0) -> Model:
-        """Poll until the model is serving, and return it with its ``endpoint_url``.
+    def model_deployment(self, model_id: str) -> ModelDeployment:
+        """The live deployment status of one model version: status, endpoint URL,
+        message and canary weight. Gateways without the deployment route are read
+        through the model list."""
+        try:
+            return ModelDeployment.model_validate(
+                self._request("GET", f"/api/v1/models/{quote(model_id, safe='')}/deployment"))
+        except NotFoundError:
+            return ModelDeployment.from_model(self.get_model(model_id))
 
-        Raises ``ModelDeploymentFailed`` with the gateway's reason when the deploy
-        fails, and ``ModelDeploymentTimeout`` when it is still pending after
-        ``timeout`` seconds.
+    def wait_for_model_deployment(self, model_id: str, *, timeout: float = 600.0,
+                                  poll_interval: float = 3.0) -> ModelDeployment:
+        """Poll until the model is serving, and return the deployment with its
+        ``endpoint_url``.
+
+        Raises ``ModelDeploymentFailed`` with the gateway's message when the deploy
+        fails or the version stops being deployed (stopped, retired, rolled back),
+        and ``ModelDeploymentTimeout`` when it is still pending after ``timeout``
+        seconds.
         """
         deadline = time.monotonic() + timeout
         while True:
-            model = self.get_model(model_id)
-            if model.serving:
-                return model
-            if model.deployment_failed:
-                raise ModelDeploymentFailed(model, model.deployment_reason)
+            deployment = self.model_deployment(model_id)
+            if deployment.serving:
+                return deployment
+            if deployment.failed:
+                raise ModelDeploymentFailed(deployment)
             if time.monotonic() >= deadline:
-                raise ModelDeploymentTimeout(model, timeout)
+                raise ModelDeploymentTimeout(deployment, timeout)
             self._sleep(poll_interval)
 
     def rollback_model(self, model_id: str) -> Model:
@@ -328,7 +344,7 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
                     "gpu_type": gpu_type if gpu else "",
                 },
                 "tools": tools or [],
-                **_scaling(scaling),
+                **scaling_body(scaling),
             },
         )
         return Agent.model_validate(data)
@@ -642,15 +658,13 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
 
     def deploy_agent_version(
         self, version_id: str, *, min_replicas: int = 1, max_replicas: int = 1, cpu: str = "500m",
-        memory: str = "1Gi", require_evaluation: bool = False, scaling: Scaling | dict | None = None,
+        memory: str = "1Gi", require_evaluation: bool = False,
     ) -> dict:
-        """Deploy (or roll back to) a published version on the managed agent runtime.
-        ``scaling`` is as for ``deploy_agent``."""
+        """Deploy (or roll back to) a published version on the managed agent runtime."""
         return self._request(
             "POST", f"/api/v1/agent-versions/{quote(version_id, safe='')}/deploy",
             json={"autoscaling": {"min_replicas": min_replicas, "max_replicas": max_replicas},
-                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation,
-                  **_scaling(scaling)},
+                  "resources": {"cpu": cpu, "memory": memory}, "require_evaluation": require_evaluation},
         )
 
     def list_agent_approvals(self, *, status: str = "pending", project_id: str = "", run_id: str = "") -> list[dict]:
@@ -736,9 +750,3 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
             response.read()
             raise error_for_response(response)
 
-
-def _scaling(scaling: Scaling | dict | None) -> dict:
-    if scaling is None:
-        return {}
-    rule = scaling if isinstance(scaling, Scaling) else Scaling.model_validate(scaling)
-    return {"scaling": {"metric": rule.metric, "target": rule.target}}
