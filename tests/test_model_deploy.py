@@ -153,3 +153,9 @@ def test_agents_deployed_before_scaling_parse():
     agent = kionga.Agent.model_validate({**AGENT, "scaling": {"metric": "", "target": 0}})
     assert agent.scaling.metric == ""
     assert kionga.Agent.model_validate({**AGENT, "scaling": None}).scaling is None
+
+
+def test_an_agent_scaling_rule_without_a_target_takes_the_gateway_default():
+    c, seen = client(lambda request, n: httpx.Response(201, json=AGENT))
+    c.deploy_agent("p-1", "support", "1", "i", "g", scaling={"metric": "requests"})
+    assert json.loads(seen[0].content)["scaling"] == {"metric": "requests"}
