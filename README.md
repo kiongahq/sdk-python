@@ -146,6 +146,10 @@ with KiongaClient() as client:
     for pod in client.application_logs(app.name, tail=100):
         for line in pod.messages:
             print(pod.pod, line)
+
+    # Follow the logs as the pods write them (Ctrl-C or `break` stops):
+    for entry in client.follow_application_logs(app.name, tail=20):
+        print(entry.pod, entry.line)
 ```
 
 Fields left out take the gateway's defaults: port 8080, 250m CPU and 256Mi memory,
@@ -155,7 +159,7 @@ rest: the gateway replaces the whole configuration, so it reads the current one
 first, and a change someone saves between that read and the write is overwritten.
 Also `list_applications`, `get_application`, `redeploy_application`,
 `application_events` (newest first) and `delete_application`. Logs are the recent
-lines of each pod; the gateway does not stream them. Invalid fields, such as a name
+lines of each pod. Invalid fields, such as a name
 that is not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError`
 before anything is sent.
 
@@ -168,13 +172,36 @@ kionga apps deploy billing --project "$PROJECT" --image ghcr.io/acme/billing:1.4
 kionga apps list
 kionga apps get billing --json
 kionga apps logs billing --tail 100
+kionga apps logs billing --follow --since 10m   # Ctrl-C stops; --since takes a time or 30s, 10m, 2h, 1d
 kionga apps events billing
 kionga apps update billing --image ghcr.io/acme/billing:1.5 --wait
 kionga apps redeploy billing --wait
 kionga apps delete billing --yes
 ```
 
-Errors print as `kionga: <reason>` and exit with status 1.
+Errors print as `kionga: <reason>` and exit with status 1. `kionga apps logs
+--follow` ends cleanly on Ctrl-C (status 0), prints `kionga: log stream ended:
+<reason>` to stderr when the pods' logs finish, and needs `--follow` for `--since`.
+
+#### Following logs
+
+`follow_application_logs(name, tail=, container=, since=, max_seconds=, on_end=)`
+yields `ApplicationLogLine` objects (`pod`, `container`, `time`, `line`) from the
+gateway's Server-Sent Events stream, as a generator on `KiongaClient` and an async
+iterator on `AsyncKiongaClient`. It starts with the last `tail` lines of each pod
+(1 to 2000, default 200), or the lines after `since` (an RFC 3339 time or a
+timezone-aware `datetime`). The gateway follows at most 20 pods and closes a stream
+after `max_seconds` (1 to 3600, default 600); the client reopens it from five
+seconds before the newest line it delivered, so a slower pod's late line is still
+caught and the resend is dropped: no repeats, and a line is lost only if the gateway
+delivers it more than five seconds late. Identical lines are
+never merged: two pods logging the same text, or one pod logging it twice in the
+same instant, each arrive. The gateway's own "log stream unavailable" notices carry
+no timestamp, so they can't be placed and arrive every time they are sent. A dropped connection is retried with the client's
+`RetryPolicy`. The iterator ends when the pods' logs are finished (no pods running,
+or every log stream closed, for example after a rollout) and passes the gateway's
+reason to `on_end`; follow again with `since` set to the last `line.time` to pick up
+new pods. On a Compose install it raises `ApplicationsNotConfiguredError`.
 
 ### Model and agent deployments
 
@@ -195,6 +222,8 @@ print(deployment.endpoint_url, deployment.canary_weight)
 `deploy_agent` takes `scaling={"metric": "requests", "target": 10}` (concurrent
 requests per replica) or `{"metric": "cpu", "target": 70}` (utilisation percent)
 to choose what drives autoscaling; `Agent.scaling` reports it.
+`deploy_agent_version(version_id, scaling=...)` takes the same rule when you deploy
+a published agent design version (`requests` 1 to 10000, `cpu` 1 to 100).
 
 On Kubernetes, `deploy_function` takes `min_replicas`, `max_replicas` (the gateway
 defaults to 0 to 5, so a function scales to zero) and the same `scaling`; `cpu`

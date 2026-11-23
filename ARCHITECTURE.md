@@ -38,7 +38,8 @@ The base URL comes from the argument, then `KIONGA_URL`, then
 request goes through `_send`. It retries what `RetryPolicy` allows, and raises a
 `KiongaAPIError` subclass for an error status. `_request` returns the JSON body, or
 `None` for an empty one, and `_page` unwraps the `items` array of list endpoints.
-`_stream` reads server-sent events and reconnects with `Last-Event-ID`.
+`_stream` reads server-sent events and reconnects with `Last-Event-ID`; callers can
+map the id (`resume`) and watch each connection open (`on_connect`).
 
 ### `kionga/client.py`, `teams.py`, `data.py`, `sse.py`, `errors.py`, `retry.py`
 
@@ -56,6 +57,25 @@ so `update_application` reads it, merges the changes and writes it back. Every
 applications call turns the gateway's `not_configured` answer into
 `ApplicationsNotConfiguredError`, because applications exist only on Kubernetes
 installs; it keeps the status error class, so `ConflictError` handlers still catch it.
+
+Followed logs (`follow_application_logs`) ride on `_stream`. The gateway ends a log
+stream after `max_seconds` and resumes from a single instant, skipping every line at
+or before the `Last-Event-ID`. Pods stream concurrently, so a slower pod can still
+owe a line older than the newest one delivered. A plain resume would lose it, and
+resuming from the last event would resend lines the client already has. The client
+therefore resumes `RESUME_OVERLAP_NS` (5 seconds) before the newest instant
+delivered, and `LogCursor` removes the resend: per instant, pod, container and text
+it counts the lines delivered inside that window and skips that many of the resend,
+wherever in the new connection they arrive. Nothing is deduplicated by text alone,
+so identical lines all arrive, and the state is bounded by the lines in the window.
+Limits that remain: a line the gateway delivers more than five seconds after a
+newer line from another pod is lost on a reconnect (closing that needs a per-pod
+cursor in the gateway), and lines with no kubelet timestamp (the gateway's own "log
+stream unavailable" notices) carry no id, cannot be placed and arrive every time they
+are sent.
+`end` with a `max_seconds` reason reopens the stream; any other reason ends the
+iterator and goes to `on_end`. `LogCursor`, `rewind` and `instant` are pure and
+tested directly.
 
 `cli.py` is the `kionga` console script (and `python -m kionga`): argparse
 subcommands under `kionga apps`, built on `KiongaClient`. `main` takes a
