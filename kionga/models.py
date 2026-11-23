@@ -87,20 +87,6 @@ class PipelineDefinition(BaseModel):
     updated_at: datetime
 
 
-class Function(BaseModel):
-    name: str
-    project_id: str = ""
-    image: str
-    status: str
-    replicas: int = 0
-    env_vars: dict[str, str] = Field(default_factory=dict)
-    annotations: dict[str, str] = Field(default_factory=dict)
-    cpu: str | None = None
-    memory: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
 SCALING_METRICS = ("requests", "cpu")
 # The gateway's limits: concurrent requests per replica, or CPU utilisation percent.
 SCALING_TARGETS = {"requests": (1, 10000), "cpu": (1, 100)}
@@ -131,6 +117,48 @@ def scaling_body(scaling: Scaling | dict | None) -> dict:
     if not low <= rule.target <= high:
         raise ValueError(f"scaling target for {rule.metric} must be {low} to {high}")
     return {"scaling": {"metric": rule.metric, "target": rule.target}}
+
+
+# Functions scale to zero by default on Kubernetes: the gateway's range is 0 to 5.
+FUNCTION_REPLICAS = (0, 5)
+MAX_WORKLOAD_REPLICAS = 100
+
+
+def function_scaling_body(min_replicas: int | None, max_replicas: int | None,
+                          scaling: Scaling | dict | None) -> dict:
+    """``replicas`` and ``scaling`` for a function deploy, or ``{}``. A bound left
+    out takes the gateway's default. Raises ``ValueError``."""
+    body = scaling_body(scaling)
+    if min_replicas is not None or max_replicas is not None:
+        low = FUNCTION_REPLICAS[0] if min_replicas is None else min_replicas
+        high = max(low, FUNCTION_REPLICAS[1]) if max_replicas is None else max_replicas
+        if low < 0:
+            raise ValueError("min_replicas can't be negative; 0 scales to zero")
+        if not 1 <= high <= MAX_WORKLOAD_REPLICAS:
+            raise ValueError(f"max_replicas must be 1 to {MAX_WORKLOAD_REPLICAS}")
+        if high < low:
+            raise ValueError("max_replicas must be at least min_replicas")
+        body["replicas"] = {"min": low, "max": high}
+    if body.get("scaling", {}).get("metric") == "cpu" and body.get("replicas", {}).get("min", 0) == 0:
+        raise ValueError("cpu scaling keeps at least one replica: set min_replicas to 1 or more")
+    return body
+
+
+class Function(BaseModel):
+    name: str
+    project_id: str = ""
+    image: str
+    status: str
+    replicas: int = 0
+    env_vars: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
+    cpu: str | None = None
+    memory: str | None = None
+    replica_range: dict[str, int] | None = None
+    scaling: Scaling | None = None
+    message: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # Deployment statuses. "serving" means the endpoint answers; "failed" carries a

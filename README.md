@@ -196,6 +196,11 @@ print(deployment.endpoint_url, deployment.canary_weight)
 requests per replica) or `{"metric": "cpu", "target": 70}` (utilisation percent)
 to choose what drives autoscaling; `Agent.scaling` reports it.
 
+On Kubernetes, `deploy_function` takes `min_replicas`, `max_replicas` (the gateway
+defaults to 0 to 5, so a function scales to zero) and the same `scaling`; `cpu`
+scaling needs `min_replicas` of 1 or more. `Function.replica_range`,
+`Function.scaling` and `Function.message` report them. Compose installs ignore them.
+
 ### Async
 
 `AsyncKiongaClient` has every method of `KiongaClient`, awaited, and returns the

@@ -20,6 +20,7 @@ from ..models import (
     ModelDeploymentFailed,
     ModelDeploymentTimeout,
     Scaling,
+    function_scaling_body,
     scaling_body,
     PipelineRun,
     PipelineDefinition,
@@ -174,9 +175,19 @@ class AsyncKiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
     async def list_functions(self) -> list[Function]:
         return [Function.model_validate(item) for item in await self._page("/api/v1/functions")]
 
-    async def deploy_function(self, project_id: str, name: str, image: str, *, cpu: str = "500m", memory: str = "512Mi", env_vars: dict[str, str] | None = None, annotations: dict[str, str] | None = None) -> Function:
-        data = await self._request("POST", "/api/v1/functions", json={"project_id": project_id, "name": name, "image": image, "cpu": cpu, "memory": memory, "env_vars": env_vars or {}, "annotations": annotations or {}})
-        return Function.model_validate(data)
+    async def deploy_function(
+        self, project_id: str, name: str, image: str, *, cpu: str = "500m", memory: str = "512Mi",
+        env_vars: dict[str, str] | None = None, annotations: dict[str, str] | None = None,
+        min_replicas: int | None = None, max_replicas: int | None = None, scaling: Scaling | dict | None = None,
+    ) -> Function:
+        """Deploy a function. On Kubernetes, ``min_replicas`` and ``max_replicas``
+        bound its autoscaling (the gateway defaults to 0 to 5, so it scales to zero)
+        and ``scaling`` picks the trigger: ``requests`` (the default) or ``cpu``,
+        which needs ``min_replicas`` of 1 or more. Compose installs ignore both."""
+        body = {"project_id": project_id, "name": name, "image": image, "cpu": cpu, "memory": memory,
+                "env_vars": env_vars or {}, "annotations": annotations or {},
+                **function_scaling_body(min_replicas, max_replicas, scaling)}
+        return Function.model_validate(await self._request("POST", "/api/v1/functions", json=body))
 
     async def invoke_function(self, name: str, payload: dict) -> dict:
         return await self._request("POST", f"/api/v1/functions/{name}/invoke", json=payload)
