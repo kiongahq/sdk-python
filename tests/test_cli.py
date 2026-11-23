@@ -54,7 +54,9 @@ def test_deploy_builds_the_request_from_flags_and_prints_the_application(capsys)
         "env": {"MODE": "prod", "URL": "a=b"}, "secret_refs": ["billing-db"], "resources": {"cpu": "500m"},
         "replicas": {"min": 0, "max": 4}, "scaling": {"metric": "requests", "target": 20},
         "health_path": "/healthz"}
-    assert "https://billing.example.net" in out and "requests target 20" in out
+    lines = out.splitlines()
+    assert "URL:        https://billing.example.net" in lines
+    assert "Scaling:    requests target 20" in lines
 
 
 def test_deploy_from_git_with_wait_polls_until_ready(capsys):
