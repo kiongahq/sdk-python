@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.2](https://github.com/kiongahq/sdk-python/compare/v0.3.1...v0.3.2) (2026-11-23)
+
+
+### Features
+
+* applications client and CLI, model deploy status, agent and function scaling ([#61](https://github.com/kiongahq/sdk-python/issues/61)) ([4ce6a93](https://github.com/kiongahq/sdk-python/commit/4ce6a932f9865da7279b68f63a7c2f58745a4dc6))
+
+
+### Documentation
+
+* turn eda.ipynb into a model promotion review ([#57](https://github.com/kiongahq/sdk-python/issues/57)) ([6d55706](https://github.com/kiongahq/sdk-python/commit/6d55706551d435d93377ef0a80ca366472d88e45))
+
+
+### Build and dependencies
+
+* limit the source distribution to a declared file list ([#60](https://github.com/kiongahq/sdk-python/issues/60)) ([5af8ab8](https://github.com/kiongahq/sdk-python/commit/5af8ab8a5a6b6296ec48a0d92fd5740f2a98ebab))
+
 ## [0.3.1](https://github.com/kiongahq/sdk-python/compare/v0.3.0...v0.3.1) (2026-11-11)
 
 
