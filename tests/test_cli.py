@@ -60,6 +60,32 @@ def test_deploy_builds_the_request_from_flags_and_prints_the_application(capsys)
     assert "Scaling:    requests target 20" in lines
 
 
+def test_run_as_user_flags_set_keep_and_clear_the_user(capsys):
+    code, _, _, seen = run(["apps", "deploy", "billing", "--project", "p-1", "--image", "i", "--run-as-user", "1000"],
+                           {("POST", BASE): ok({**APP, "run_as_user": 1000}, 201)}, capsys)
+    assert code == 0 and json.loads(seen[0].content)["run_as_user"] == 1000
+    routes = {("GET", f"{BASE}/billing"): ok({**APP, "run_as_user": 1000}), ("PUT", f"{BASE}/billing"): ok(APP, 202)}
+    code, _, _, seen = run(["apps", "update", "billing", "--image", "ghcr.io/acme/billing:1.5"], routes, capsys)
+    assert code == 0 and json.loads(seen[-1].content)["run_as_user"] == 1000, "an update keeps it"
+    code, _, _, seen = run(["apps", "update", "billing", "--run-as-user", "2000"], routes, capsys)
+    assert code == 0 and json.loads(seen[-1].content)["run_as_user"] == 2000
+    code, _, _, seen = run(["apps", "update", "billing", "--no-run-as-user"], routes, capsys)
+    assert code == 0 and seen[-1].method == "PUT" and "run_as_user" not in json.loads(seen[-1].content)
+
+
+def test_run_as_user_flags_refuse_root_and_contradictions(capsys):
+    code, _, err, seen = run(["apps", "deploy", "billing", "--project", "p-1", "--image", "i", "--run-as-user", "0"],
+                             {}, capsys)
+    assert code == 1 and "never run as root" in err and seen == []
+    for argv in (["apps", "update", "billing", "--run-as-user", "1000", "--no-run-as-user"],
+                 ["apps", "deploy", "billing", "--project", "p-1", "--image", "i", "--no-run-as-user"],
+                 ["apps", "deploy", "billing", "--project", "p-1", "--image", "i", "--run-as-user", "root"]):
+        with pytest.raises(SystemExit) as stopped:
+            run(argv, {}, capsys)
+        assert stopped.value.code == 2
+        capsys.readouterr()
+
+
 def test_deploy_from_git_with_wait_polls_until_ready(capsys):
     building = {**APP, "name": "docs", "status": "pending", "message": "building image"}
     code, out, err, seen = run(

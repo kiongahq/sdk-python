@@ -236,6 +236,114 @@ def test_update_validates_before_writing():
     assert all(r.method == "GET" for r in gw.seen)
 
 
+# run_as_user: the numeric user the containers run as. PUT replaces the whole
+# configuration, so an update must send back the value the application has.
+
+def test_create_sends_run_as_user_only_when_given():
+    c, gw = client({("POST", BASE): ok(app(run_as_user=1000), 201)})
+    created = c.create_application("p-1", "billing", image="i", run_as_user=1000)
+    assert gw.body()["run_as_user"] == 1000 and created.run_as_user == 1000
+    c.create_application("p-1", "billing", image="i")
+    assert "run_as_user" not in gw.body()
+    assert Application.model_validate(APP).run_as_user is None
+    assert Application.model_validate(app(run_as_user=1000)).request()["run_as_user"] == 1000
+
+
+def test_update_keeps_the_run_as_user_the_application_has():
+    # The regression: the body was rebuilt without run_as_user, the PUT cleared it,
+    # and an image that needs it could no longer start.
+    c, gw = client({("GET", f"{BASE}/billing"): ok(app(run_as_user=1000)),
+                    ("PUT", f"{BASE}/billing"): ok(app(run_as_user=1000), 202)})
+    c.update_application("billing", image="ghcr.io/acme/billing:1.5")
+    assert gw.body()["run_as_user"] == 1000 and gw.body()["image"] == "ghcr.io/acme/billing:1.5"
+    c.update_application("billing", max_replicas=8, visibility="public")
+    assert gw.body()["run_as_user"] == 1000
+
+
+def test_update_changes_or_clears_run_as_user_only_when_asked():
+    routes = {("GET", f"{BASE}/billing"): ok(app(run_as_user=1000)), ("PUT", f"{BASE}/billing"): ok(APP, 202)}
+    c, gw = client(routes)
+    c.update_application("billing", run_as_user=2000)  # a change on its own is an update
+    assert gw.body()["run_as_user"] == 2000 and gw.body()["image"] == APP["image"]
+    c.update_application("billing", run_as_user=kionga.CLEAR)
+    assert "run_as_user" not in gw.body() and gw.body()["image"] == APP["image"]
+    c.update_application("billing", run_as_user=kionga.CLEAR, port=9000)
+    assert "run_as_user" not in gw.body() and gw.body()["port"] == 9000
+    # Clearing what was never set still writes, and sends none.
+    c, gw = client({("GET", f"{BASE}/billing"): ok(APP), ("PUT", f"{BASE}/billing"): ok(APP, 202)})
+    c.update_application("billing", run_as_user=kionga.CLEAR)
+    assert gw.seen[-1].method == "PUT" and "run_as_user" not in gw.body()
+    c.update_application("billing", run_as_user=1000)
+    assert gw.body()["run_as_user"] == 1000
+
+
+def test_clear_is_one_value_and_only_an_update_takes_it():
+    from kionga.applications import CLEAR, _Clear
+    assert kionga.CLEAR is CLEAR is _Clear() and repr(CLEAR) == "kionga.CLEAR"
+    c, gw = client({("POST", BASE): ok(APP, 201)})
+    with pytest.raises(ValueError, match="run_as_user"):
+        c.create_application("p-1", "billing", image="i", run_as_user=kionga.CLEAR)
+    assert gw.seen == []
+
+
+@pytest.mark.parametrize("value, message", [
+    (0, "never run as root"), (-1, "1 to 2147483647"), (2147483648, "1 to 2147483647"),
+    (True, "whole number"), ("1000", "whole number"), (1000.0, "whole number"),
+])
+def test_a_run_as_user_the_gateway_would_refuse_is_rejected_before_writing(value, message):
+    c, gw = client({("GET", f"{BASE}/billing"): ok(APP)})
+    with pytest.raises(ValueError, match=message):
+        c.create_application("p-1", "billing", image="i", run_as_user=value)
+    with pytest.raises(ValueError, match=message):
+        c.update_application("billing", run_as_user=value)
+    assert all(r.method == "GET" for r in gw.seen)
+    c, gw = client({("POST", BASE): ok(app(run_as_user=2147483647), 201)})
+    assert c.create_application("p-1", "billing", image="i", run_as_user=2147483647).run_as_user == 2147483647
+    assert c.create_application("p-1", "billing", image="i", run_as_user=1) and gw.body()["run_as_user"] == 1
+
+
+def test_update_of_an_internal_application_is_not_refused_by_the_client():
+    # The gateway accepts visibility "internal" (no host). The client's own check
+    # used to know only public and sso, so any update of such an application failed.
+    c, gw = client({("GET", f"{BASE}/billing"): ok(app(visibility="internal")),
+                    ("PUT", f"{BASE}/billing"): ok(app(visibility="internal"), 202)})
+    c.update_application("billing", max_replicas=8)
+    assert gw.body()["visibility"] == "internal" and gw.body()["replicas"] == {"min": 0, "max": 8}
+    c, gw = client({("POST", BASE): ok(app(visibility="internal"), 201)})
+    c.create_application("p-1", "billing", image="i", visibility="internal")
+    assert gw.body()["visibility"] == "internal"
+
+
+def test_an_update_sends_back_every_request_field_the_gateway_returned():
+    # Every field of the gateway's ApplicationRequest, as its Application returns them.
+    full = app(image="", source={"git": "https://g", "ref": "v2", "context_dir": "svc", "dockerfile": "D"},
+               run_as_user=1000, visibility="internal")
+    c, gw = client({("GET", f"{BASE}/billing"): ok(full), ("PUT", f"{BASE}/billing"): ok(full, 202)})
+    c.update_application("billing", port=9000)
+    assert gw.body() == {
+        "project_id": "p-1", "name": "billing",
+        "source": {"git": "https://g", "ref": "v2", "context_dir": "svc", "dockerfile": "D"}, "port": 9000,
+        "env": {"MODE": "prod"}, "secret_refs": ["billing-db"], "resources": {"cpu": "500m", "memory": "512Mi"},
+        "replicas": {"min": 0, "max": 4}, "scaling": {"metric": "requests", "target": 20},
+        "health_path": "/healthz", "visibility": "internal", "run_as_user": 1000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_async_client_keeps_and_clears_run_as_user():
+    gateway = Gateway({("GET", f"{BASE}/billing"): ok(app(run_as_user=1000)),
+                       ("PUT", f"{BASE}/billing"): ok(app(run_as_user=1000), 202),
+                       ("POST", BASE): ok(app(run_as_user=1000), 201)})
+    async with kionga.AsyncKiongaClient("http://gateway", transport=httpx.MockTransport(gateway)) as c:
+        await c.update_application("billing", image="ghcr.io/acme/billing:1.5")
+        assert gateway.body()["run_as_user"] == 1000
+        await c.update_application("billing", run_as_user=kionga.CLEAR)
+        assert "run_as_user" not in gateway.body()
+        assert (await c.create_application("p-1", "billing", image="i", run_as_user=1000)).run_as_user == 1000
+        with pytest.raises(ValueError, match="never run as root"):
+            await c.update_application("billing", run_as_user=0)
+
+
 def test_delete_and_redeploy():
     c, gw = client({
         ("DELETE", f"{BASE}/billing"): httpx.Response(204),
@@ -399,7 +507,7 @@ def test_request_round_trips_only_the_fields_a_write_accepts():
     body = Application.model_validate(app(source={"git": "https://g", "ref": "main", "dockerfile": "Dockerfile"},
                                           image="")).request()
     assert set(body) <= {"name", "project_id", "image", "source", "port", "env", "secret_refs", "resources",
-                         "replicas", "scaling", "health_path", "visibility"}
+                         "replicas", "scaling", "health_path", "visibility", "run_as_user"}
     assert "image" not in body and body["source"]["git"] == "https://g"
 
 

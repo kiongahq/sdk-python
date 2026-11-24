@@ -20,6 +20,7 @@ from ..models import (
     ModelDeploymentTimeout,
     Scaling,
     function_scaling_body,
+    run_as_user_value,
     scaling_body,
     PipelineRun,
     PipelineDefinition,
@@ -178,14 +179,23 @@ class KiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
         self, project_id: str, name: str, image: str, *, cpu: str = "500m", memory: str = "512Mi",
         env_vars: dict[str, str] | None = None, annotations: dict[str, str] | None = None,
         min_replicas: int | None = None, max_replicas: int | None = None, scaling: Scaling | dict | None = None,
+        run_as_user: int | None = None,
     ) -> Function:
         """Deploy a function. On Kubernetes, ``min_replicas`` and ``max_replicas``
         bound its autoscaling (the gateway defaults to 0 to 5, so it scales to zero)
         and ``scaling`` picks the trigger: ``requests`` (the default) or ``cpu``,
-        which needs ``min_replicas`` of 1 or more. Compose installs ignore both."""
+        which needs ``min_replicas`` of 1 or more. Compose installs ignore both.
+
+        ``run_as_user`` (Kubernetes only) is the numeric user the function runs as,
+        1 to 2147483647 and never 0: set it when the image runs as root or names its
+        user instead of numbering it. Deploying again replaces the whole function,
+        so pass it on every deploy that should keep it."""
         body = {"project_id": project_id, "name": name, "image": image, "cpu": cpu, "memory": memory,
                 "env_vars": env_vars or {}, "annotations": annotations or {},
                 **function_scaling_body(min_replicas, max_replicas, scaling)}
+        user = run_as_user_value(run_as_user)
+        if user is not None:
+            body["run_as_user"] = user
         return Function.model_validate(self._request("POST", "/api/v1/functions", json=body))
 
     def invoke_function(self, name: str, payload: dict) -> dict:

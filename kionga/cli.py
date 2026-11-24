@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .applications import (
+    CLEAR,
     SCALING_METRICS,
     VISIBILITIES,
     Application,
@@ -113,7 +114,14 @@ def _spec_arguments(command: argparse.ArgumentParser, *, create: bool) -> None:
     command.add_argument("--target", type=int, help="requests per replica, or CPU percent")
     command.add_argument("--health-path", default=None, help="readiness and liveness path (default /)")
     command.add_argument("--visibility", choices=VISIBILITIES, default=None,
-                         help="sso (default) keeps it behind Kionga sign-in")
+                         help="sso (default) keeps it behind Kionga sign-in; internal gives it no host")
+    user = command.add_mutually_exclusive_group()
+    user.add_argument("--run-as-user", type=int, default=None, metavar="UID",
+                      help="numeric user the containers run as (1 to 2147483647, never 0), for an image "
+                           "that runs as root or names its user")
+    if not create:
+        user.add_argument("--no-run-as-user", action="store_true",
+                          help="remove the run-as user, so the image's own user applies")
 
 
 def _wait_arguments(command: argparse.ArgumentParser) -> None:
@@ -150,6 +158,7 @@ def _spec(args: argparse.Namespace) -> dict[str, Any]:
         "min_replicas": args.min_replicas, "max_replicas": args.max_replicas,
         "scaling": {"metric": args.scale_on, "target": args.target} if args.scale_on else None,
         "health_path": args.health_path, "visibility": args.visibility,
+        "run_as_user": CLEAR if getattr(args, "no_run_as_user", False) else args.run_as_user,
     }
 
 

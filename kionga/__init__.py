@@ -10,6 +10,7 @@ from .applications import (
     ApplicationStatus,
     ApplicationTimeout,
     ApplicationsNotConfiguredError,
+    CLEAR,
     GitSource,
 )
 from .client import AsyncKiongaClient, KiongaClient
@@ -66,6 +67,7 @@ __all__ = [
     "ApplicationStatus",
     "ApplicationTimeout",
     "ApplicationsNotConfiguredError",
+    "CLEAR",
     "GitSource",
     "ModelDeployment",
     "ModelDeploymentFailed",
