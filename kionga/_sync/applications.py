@@ -15,7 +15,9 @@ from ..applications import (
     ApplicationPodLogs,
     ApplicationsNotConfiguredError,
     ApplicationTimeout,
+    CLEAR,
     SLICE_END,
+    _Clear,
     GitSource,
     LogCursor,
     Scaling,
@@ -31,6 +33,13 @@ from ..errors import BadRequestError, NotConfiguredError
 __all__ = ["ApplicationsAPI"]
 
 BASE = "/api/v1/applications"
+
+
+def _changed(given: Any, current: Any) -> Any:
+    """The value an update sends: ``current`` when nothing was given, nothing for ``CLEAR``."""
+    if given is None:
+        return current
+    return None if given is CLEAR else given
 
 
 class ApplicationsAPI:
@@ -61,14 +70,19 @@ class ApplicationsAPI:
         scaling: Scaling | dict[str, Any] | None = None,
         health_path: str | None = None,
         visibility: str | None = None,
+        run_as_user: int | None = None,
     ) -> Application:
         """Deploy a service from ``image``, or from ``source`` (a Git repository Kionga builds).
 
         It is served at ``https://<name>.<install domain>``. ``min_replicas=0`` scales it
         to zero when idle (with ``requests`` scaling); ``scaling`` chooses ``requests``
         (concurrent requests per replica) or ``cpu`` (utilisation percent).
-        ``visibility="sso"`` keeps it behind Kionga sign-in; ``"public"`` opens it.
+        ``visibility="sso"`` keeps it behind Kionga sign-in, ``"public"`` opens it and
+        ``"internal"`` gives it no host (callers inside the cluster only).
         ``secret_refs`` name Kubernetes secrets exposed to the container as environment.
+        ``run_as_user`` is the numeric user the containers run as (1 to 2147483647,
+        never 0): set it when the image runs as root or names its user instead of
+        numbering it, because Kionga refuses to start such an image otherwise.
         Fields left out take the gateway's defaults: port 8080, 250m CPU, 256Mi
         memory, 1 to 3 replicas, requests scaling, health path ``/``, ``sso``.
         Raises ``ValueError`` for an invalid field before sending anything.
@@ -77,7 +91,7 @@ class ApplicationsAPI:
             project_id=project_id, name=name, image=image, source=source, port=port, env=env,
             secret_refs=secret_refs, cpu=cpu, memory=memory, min_replicas=min_replicas,
             max_replicas=max_replicas, scaling=scaling, health_path=health_path,
-            visibility=visibility,
+            visibility=visibility, run_as_user=run_as_user,
         )
         return Application.model_validate(self._apps("POST", BASE, json=body))
 
@@ -106,6 +120,7 @@ class ApplicationsAPI:
         scaling: Scaling | dict[str, Any] | None = None,
         health_path: str | None = None,
         visibility: str | None = None,
+        run_as_user: int | _Clear | None = None,
     ) -> Application:
         """Change the fields given and keep the rest; the operator rolls it out.
 
@@ -113,6 +128,8 @@ class ApplicationsAPI:
         applies your changes and sends the result. A change someone saves between
         the read and the write is overwritten. Giving ``image`` drops a Git
         ``source`` and the reverse. ``env`` and ``secret_refs`` replace the lists.
+        ``run_as_user`` left out keeps the user the application has;
+        ``run_as_user=kionga.CLEAR`` removes it, so the image's own user applies.
         """
         current = self.get_application(name)
         merged = current.request()
@@ -120,8 +137,9 @@ class ApplicationsAPI:
         replicas = dict(merged.get("replicas") or {})
         changes = {"port": port, "env": env, "secret_refs": secret_refs, "health_path": health_path,
                    "visibility": visibility, "scaling": scaling}
-        if not any(value is not None for value in (image, source, cpu, memory, min_replicas, max_replicas,
-                                                   *changes.values())):
+        if run_as_user is None and not any(
+                value is not None for value in (image, source, cpu, memory, min_replicas, max_replicas,
+                                                *changes.values())):
             raise ValueError("nothing to update")
         if image and source is not None:
             raise ValueError("give image or source, not both")
@@ -141,6 +159,7 @@ class ApplicationsAPI:
             max_replicas=replicas.get("max") if max_replicas is None else max_replicas,
             scaling=merged.get("scaling"), health_path=merged.get("health_path"),
             visibility=merged.get("visibility"),
+            run_as_user=_changed(run_as_user, merged.get("run_as_user")),
         )
         return Application.model_validate(self._apps("PUT", f"{BASE}/{_name(name)}", json=body))
 

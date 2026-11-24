@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import ConflictError, NotConfiguredError, ServerError
-from .models import SCALING_METRICS, Scaling, scaling_body
+from .models import SCALING_METRICS, Scaling, run_as_user_value, scaling_body
 from .sse import ServerSentEvent, StreamError
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "ApplicationStatus",
     "ApplicationTimeout",
     "ApplicationsNotConfiguredError",
+    "CLEAR",
     "GitSource",
     "SCALING_METRICS",
     "Scaling",
@@ -47,7 +48,8 @@ __all__ = [
 # DNS label: lower case letters, digits and hyphens, starting with a letter.
 NAME = re.compile(r"^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-VISIBILITIES = ("public", "sso")
+# "internal" gives the application no host: only callers inside the cluster reach it.
+VISIBILITIES = ("public", "sso", "internal")
 MAX_REPLICAS = 100
 MAX_LOG_TAIL = 2000
 MAX_FOLLOW_SECONDS = 3600
@@ -56,7 +58,27 @@ MAX_FOLLOW_SECONDS = 3600
 SLICE_END = "max_seconds"
 # The fields a create or a replace accepts (the gateway rejects unknown fields).
 REQUEST_FIELDS = ("name", "project_id", "image", "source", "port", "env", "secret_refs", "resources",
-                  "replicas", "scaling", "health_path", "visibility")
+                  "replicas", "scaling", "health_path", "visibility", "run_as_user")
+
+
+class _Clear:
+    """The type of ``CLEAR``."""
+
+    _instance: _Clear | None = None
+
+    def __new__(cls) -> _Clear:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "kionga.CLEAR"
+
+
+# Pass to ``update_application`` to remove an optional setting. ``None`` there means
+# "keep what the application has", so removing needs its own value:
+# ``update_application("billing", run_as_user=kionga.CLEAR)``.
+CLEAR = _Clear()
 # Phases the gateway reports. "missing" means the Kubernetes resource is gone.
 READY_PHASES = frozenset({"ready", "running", "scaled-to-zero"})
 FAILED_PHASES = frozenset({"failed", "missing"})
@@ -116,6 +138,8 @@ class Application(_Open):
     scaling: Scaling | None = None
     health_path: str = ""
     visibility: str = ""
+    # The numeric user the containers run as; None is the image's own user.
+    run_as_user: int | None = None
     generation: int | None = None
     status: ApplicationStatus = Field(default_factory=ApplicationStatus)
     created_at: datetime | None = None
@@ -527,6 +551,7 @@ def application_body(
     scaling: Scaling | dict[str, Any] | None = None,
     health_path: str | None = None,
     visibility: str | None = None,
+    run_as_user: int | None = None,
 ) -> dict[str, Any]:
     """Validate a full application configuration and build the request body.
 
@@ -582,6 +607,9 @@ def application_body(
         if visibility not in VISIBILITIES:
             raise ValueError(f"visibility must be one of {list(VISIBILITIES)}")
         body["visibility"] = visibility
+    user = run_as_user_value(run_as_user)
+    if user is not None:
+        body["run_as_user"] = user
     return body
 
 

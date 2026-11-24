@@ -133,7 +133,8 @@ with KiongaClient() as client:
         port=8080, env={"MODE": "prod"}, secret_refs=["billing-db"],
         min_replicas=0, max_replicas=4,            # 0 scales to zero when idle
         scaling={"metric": "requests", "target": 20},
-        health_path="/healthz", visibility="sso",  # "public" skips Kionga sign-in
+        health_path="/healthz", visibility="sso",  # "public" skips sign-in; "internal": no host
+        run_as_user=1000,                          # only for an image that runs as root
     )
     try:
         app = client.wait_until_ready(app.name, timeout=600)
@@ -157,6 +158,18 @@ Fields left out take the gateway's defaults: port 8080, 250m CPU and 256Mi memor
 `requests` scaling. `update_application` changes the fields you pass and keeps the
 rest: the gateway replaces the whole configuration, so it reads the current one
 first, and a change someone saves between that read and the write is overwritten.
+
+`run_as_user` is the numeric user the containers run as, from 1 to 2147483647. Kionga
+never runs a workload as root, so set it when the image runs as root or names its
+user instead of numbering it; such an image does not start without it. 0 is refused,
+by the client before anything is sent and by the gateway. `update_application` keeps
+the user the application has; pass `run_as_user=` to change it, or
+`run_as_user=kionga.CLEAR` to remove it so the image's own user applies (`None`
+means "keep", as for every other field). `deploy_function` takes `run_as_user` too
+(Kubernetes only). A function deploy replaces the whole function, so pass it on
+every deploy that should keep it. `Application.run_as_user` and
+`Function.run_as_user` report the value, `None` when it is not set.
+
 Also `list_applications`, `get_application`, `redeploy_application`,
 `application_events` (newest first) and `delete_application`. Logs are the recent
 lines of each pod. Invalid fields, such as a name
@@ -175,6 +188,7 @@ kionga apps logs billing --tail 100
 kionga apps logs billing --follow --since 10m   # Ctrl-C stops; --since takes a time or 30s, 10m, 2h, 1d
 kionga apps events billing
 kionga apps update billing --image ghcr.io/acme/billing:1.5 --wait
+kionga apps update billing --run-as-user 1000   # --no-run-as-user removes it; deploy takes --run-as-user too
 kionga apps redeploy billing --wait
 kionga apps delete billing --yes
 ```

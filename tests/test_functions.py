@@ -80,3 +80,21 @@ def test_a_scaling_rule_without_a_target_takes_the_gateway_default(scaling, sent
     c, seen = client()
     c.deploy_function("p-1", "resize", "i", min_replicas=1, scaling=scaling)
     assert json.loads(seen[0].content)["scaling"] == sent
+
+
+def test_run_as_user_is_sent_when_given_and_read_back():
+    c, seen = client()
+    c.deploy_function("p-1", "resize", "i", run_as_user=1000)
+    assert json.loads(seen[0].content)["run_as_user"] == 1000
+    assert kionga.Function.model_validate({**FUNCTION, "run_as_user": 1000}).run_as_user == 1000
+    assert kionga.Function.model_validate(FUNCTION).run_as_user is None
+
+
+@pytest.mark.parametrize("value, message", [
+    (0, "never run as root"), (-5, "1 to 2147483647"), (2147483648, "1 to 2147483647"), ("1000", "whole number"),
+])
+def test_a_run_as_user_the_gateway_would_refuse_is_rejected_before_sending(value, message):
+    c, seen = client()
+    with pytest.raises(ValueError, match=message):
+        c.deploy_function("p-1", "resize", "i", run_as_user=value)
+    assert seen == []

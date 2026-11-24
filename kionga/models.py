@@ -130,6 +130,28 @@ FUNCTION_REPLICAS = (0, 5)
 MAX_WORKLOAD_REPLICAS = 100
 
 
+# The gateway's limit on run_as_user: a non-root numeric user id.
+MAX_RUN_AS_USER = 2147483647
+
+
+def run_as_user_value(value: object) -> int | None:
+    """A checked ``run_as_user`` for a request, or ``None`` when left out.
+
+    It is the numeric user the containers run as, 1 to 2147483647. Kionga never
+    runs a workload as root, so 0 is refused. Raises ``ValueError``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("run_as_user must be a whole number: a user id such as 1000")
+    if value == 0:
+        raise ValueError("run_as_user can't be 0: workloads never run as root; "
+                         "use a non-root user id such as 1000")
+    if not 1 <= value <= MAX_RUN_AS_USER:
+        raise ValueError(f"run_as_user must be a user id from 1 to {MAX_RUN_AS_USER}")
+    return value
+
+
 def function_scaling_body(min_replicas: int | None, max_replicas: int | None,
                           scaling: Scaling | dict | None) -> dict:
     """``replicas`` and ``scaling`` for a function deploy, or ``{}``. A bound left
@@ -162,6 +184,8 @@ class Function(BaseModel):
     memory: str | None = None
     replica_range: dict[str, int] | None = None
     scaling: Scaling | None = None
+    # The numeric user the function runs as on Kubernetes; None is the image's own.
+    run_as_user: int | None = None
     message: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -53,7 +53,12 @@ Applications (`/api/v1/applications/{name}`): `applications.py` holds the respon
 models, `application_body` (validation and the request body), `failure_reason` and
 the errors; the async mixin holds the methods, generated into `_sync` like the rest
 of the client. The gateway replaces an application's whole configuration on `PUT`,
-so `update_application` reads it, merges the changes and writes it back. Every
+so `update_application` reads it, merges the changes and writes it back. The body
+is rebuilt from `REQUEST_FIELDS`, the fields the gateway's request accepts: a field
+missing from that list would be cleared by every update, so a new request field is
+added there, to `Application` and to `application_body` together (a test sends back
+every request field the gateway returns). `None` means "keep" for every argument;
+`CLEAR` removes an optional scalar such as `run_as_user`. Every
 applications call turns the gateway's `not_configured` answer into
 `ApplicationsNotConfiguredError`, because applications exist only on Kubernetes
 installs; it keeps the status error class, so `ConflictError` handlers still catch it.
