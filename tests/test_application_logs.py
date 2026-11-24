@@ -1,11 +1,13 @@
 """Followed application logs: the gateway's Server-Sent Events stream.
 
-Fixtures follow the gateway: ``id: <RFC 3339 nano>``, ``event: log`` with
-``{pod, container, time, line}``, and ``event: end`` with a reason. The gateway
-closes a stream after ``max_seconds`` ("max_seconds reached; ...") and skips lines
-at or before the resume point; a stricter or looser server must not change what
-the caller sees.
+Fixtures follow the gateway: ``event: log`` with ``{pod, container, time, line}``
+and ``event: end`` with a reason. The id of a log event is an opaque per-pod cursor
+(``v1.<base64url>``) on a current gateway and ``<RFC 3339 nano>`` on one without
+cursors; both are covered. The gateway closes a stream after ``max_seconds``
+("max_seconds reached; ...") and skips what the resume point says the client has; a
+stricter or looser server must not change what the caller sees.
 """
+import base64
 import http.server
 import json
 import threading
@@ -19,6 +21,7 @@ from kionga import (
     ApplicationLogLine,
     ApplicationsNotConfiguredError,
     AsyncKiongaClient,
+    BadRequestError,
     ConflictError,
     KiongaConnectionError,
     NotFoundError,
@@ -34,9 +37,10 @@ DONE = 'event: end\ndata: {"reason":"all pod log streams closed"}\n\n'
 T = "2026-11-24T10:00:00"
 
 
-def log(time, line, pod="billing-0", container="app"):
+def log(time, line, pod="billing-0", container="app", id=None):
     body = json.dumps({"pod": pod, "container": container, "time": time, "line": line})
-    head = f"id: {time}\n" if time else ""
+    id = time if id is None else id
+    head = f"id: {id}\n" if id else ""
     return f"{head}event: log\ndata: {body}\n\n"
 
 
@@ -233,6 +237,178 @@ def test_the_application_name_is_escaped_in_the_path():
     assert seen[0].url.raw_path.decode().startswith("/api/v1/applications/a%2Fb/logs")
 
 
+# A gateway that sends cursor ids: the id goes back unchanged and nothing is filtered.
+
+def test_a_gateway_cursor_is_sent_back_unchanged_and_nothing_is_rewound():
+    c, seen = client([sse(log(f"{T}.100Z", "a", id="v1.AAAA"), log(f"{T}.200Z", "b", id="v1.BBBB_-x"), SLICE),
+                      sse(log(f"{T}.300Z", "c", id="v1.CCCC"), SLICE),
+                      sse(DONE)])
+    assert lines(c) == [("billing-0", "a"), ("billing-0", "b"), ("billing-0", "c")]
+    assert "Last-Event-ID" not in seen[0].headers
+    assert seen[1].headers["Last-Event-ID"] == "v1.BBBB_-x"
+    assert seen[2].headers["Last-Event-ID"] == "v1.CCCC"
+    assert "since" not in seen[1].url.params and c.slept == []
+
+
+def test_with_a_gateway_cursor_a_late_line_and_a_new_identical_line_are_delivered():
+    # The gateway resumes each pod exactly, so what it sends after a cursor is new: pod
+    # b's line 8 seconds older than the newest delivered, and a second identical line
+    # in the instant already seen. The timestamp path would drop that one as a resend.
+    c, seen = client([sse(log("2026-11-24T10:00:20Z", "x", pod="a", id="v1.one"), SLICE),
+                      sse(log("2026-11-24T10:00:12Z", "late", pod="b", id="v1.two"),
+                          log("2026-11-24T10:00:20Z", "x", pod="a", id="v1.three"), DONE)])
+    assert lines(c) == [("a", "x"), ("b", "late"), ("a", "x")]
+    assert seen[1].headers["Last-Event-ID"] == "v1.one"
+
+
+def test_a_line_without_an_id_keeps_the_last_gateway_cursor():
+    c, seen = client([sse(log(f"{T}.1Z", "a", id="v1.one"), log("", "log stream unavailable: waiting", pod="b"), SLICE),
+                      sse(DONE)])
+    assert lines(c) == [("billing-0", "a"), ("b", "log stream unavailable: waiting")]
+    assert seen[1].headers["Last-Event-ID"] == "v1.one"
+
+
+def test_a_dropped_connection_resumes_from_the_gateway_cursor():
+    c, seen = client([sse(log(f"{T}.1Z", "a", id="v1.one")), httpx.ReadError("reset"),
+                      sse(log(f"{T}.2Z", "b", id="v1.two"), DONE)])
+    assert lines(c) == [("billing-0", "a"), ("billing-0", "b")]
+    assert [r.headers.get("Last-Event-ID") for r in seen] == [None, "v1.one", "v1.one"]
+
+
+def test_the_id_shape_is_detected_on_every_reconnect():
+    # Replicas of two versions behind one address: timestamps, then cursors, then timestamps.
+    c, seen = client([sse(log("2026-11-24T10:00:10Z", "a"), SLICE),
+                      sse(log("2026-11-24T10:00:10Z", "a"), log("2026-11-24T10:00:11Z", "b", id="v1.one"), SLICE),
+                      sse(log("2026-11-24T10:00:11Z", "b", id="v1.two"), log("2026-11-24T10:00:12Z", "c"), SLICE),
+                      sse(log("2026-11-24T10:00:11Z", "b"), log("2026-11-24T10:00:11Z", "b"),
+                          log("2026-11-24T10:00:12Z", "c"), log("2026-11-24T10:00:13Z", "d"), DONE)])
+    # Connection 2 resumed by timestamp: the resent "a" is dropped. Connection 3 resumed
+    # by cursor: its "b" is a new identical line. Connection 4 resumed by timestamp:
+    # the two "b" and the "c" already delivered are dropped.
+    assert [line for _, line in lines(c)] == ["a", "b", "b", "c", "d"]
+    assert [r.headers.get("Last-Event-ID") for r in seen] == [
+        None, "2026-11-24T10:00:04.999999999Z", "v1.one", "2026-11-24T10:00:06.999999999Z"]
+
+
+def refused(message="since must be an RFC 3339 timestamp, such as the id of the last event received"):
+    return httpx.Response(400, json={"error": "invalid_request", "message": message})
+
+
+def test_a_gateway_that_refuses_the_cursor_is_resumed_by_timestamp_without_repeats():
+    # An older replica answers the reconnect: it does not know the cursor. The follow
+    # carries on from five seconds before the newest instant and drops the resend.
+    c, seen = client([sse(log("2026-11-24T10:00:10Z", "a", id="v1.one"), SLICE),
+                      refused(),
+                      sse(log("2026-11-24T10:00:10Z", "a"), log("2026-11-24T10:00:11Z", "b"), DONE)])
+    assert lines(c) == [("billing-0", "a"), ("billing-0", "b")]
+    assert [r.headers.get("Last-Event-ID") for r in seen] == [None, "v1.one", "2026-11-24T10:00:04.999999999Z"]
+
+
+def test_a_refused_timestamp_or_first_request_is_an_error():
+    c, seen = client([refused("max_seconds must be between 1 and 3600")])
+    with pytest.raises(BadRequestError, match="max_seconds"):
+        lines(c)
+    assert len(seen) == 1
+    # The cursor is refused, and so is the timestamp that replaces it: no loop.
+    c, seen = client([sse(log("2026-11-24T10:00:10Z", "a", id="v1.one"), SLICE), refused(), refused()])
+    with pytest.raises(BadRequestError):
+        lines(c)
+    assert len(seen) == 3
+
+
+# A stub of the gateway's resume rules, for both id styles. Each pod has a log, and
+# ``release`` says how many of a pod's lines exist at each connection.
+
+class StubGateway:
+    def __init__(self, cursors, logs, releases):
+        self.cursors, self.logs, self.releases, self.resumed = cursors, logs, releases, []
+
+    def _position(self, last_id):
+        """Lines delivered per pod, from a cursor id; or the instant, from a timestamp id."""
+        if not last_id:
+            return None
+        if last_id.startswith("v1."):
+            return json.loads(base64.urlsafe_b64decode(last_id[3:] + "=" * (-len(last_id[3:]) % 4)))
+        if instant(last_id) is None:
+            return "refuse"
+        return instant(last_id)
+
+    def __call__(self, request):
+        last_id = request.headers.get("Last-Event-ID", "")
+        self.resumed.append(last_id)
+        position = self._position(last_id)
+        if position == "refuse" or (isinstance(position, dict) and not self.cursors):
+            return refused()
+        release = self.releases[min(len(self.resumed), len(self.releases)) - 1]
+        final = len(self.resumed) >= len(self.releases)
+        delivered = dict(position) if isinstance(position, dict) else {}
+        blocks = []
+        for pod, entries in self.logs.items():
+            for index, (time, text) in enumerate(entries[:release[pod]]):
+                if isinstance(position, dict) and index < position.get(pod, 0):
+                    continue  # at or before this pod's cursor
+                if isinstance(position, tuple) and instant(time) <= position:
+                    continue  # at or before the single resume instant
+                if position is None and index < len(entries[:release[pod]]) - 2:
+                    continue  # a first connection sends the tail (2 lines)
+                delivered[pod] = index + 1
+                event_id = None
+                if self.cursors:
+                    packed = json.dumps(delivered, sort_keys=True).encode()
+                    event_id = "v1." + base64.urlsafe_b64encode(packed).decode().rstrip("=")
+                blocks.append(log(time, text, pod=pod, id=event_id))
+        return sse(*blocks, DONE if final else SLICE)
+
+
+STUB_LOGS = {
+    "a": [("2026-11-24T10:00:01Z", "a1"), ("2026-11-24T10:00:20Z", "tick"), ("2026-11-24T10:00:20Z", "tick"),
+          ("2026-11-24T10:00:30Z", "a4")],
+    # b2 is stamped 12s but reaches the gateway only for the second connection, after
+    # the client has a's 20s lines: 8 seconds late.
+    "b": [("2026-11-24T10:00:02Z", "b1"), ("2026-11-24T10:00:12Z", "b2-late"), ("2026-11-24T10:00:31Z", "b3")],
+}
+STUB_RELEASES = [{"a": 2, "b": 1}, {"a": 3, "b": 2}, {"a": 4, "b": 3}]
+
+
+def follow_stub(cursors):
+    stub = StubGateway(cursors, STUB_LOGS, STUB_RELEASES)
+    c = kionga.KiongaClient("http://gateway", transport=httpx.MockTransport(stub))
+    c._sleep = lambda seconds: None
+    return lines(c), stub
+
+
+def test_against_a_stub_gateway_with_cursors_every_line_arrives_exactly_once():
+    got, stub = follow_stub(cursors=True)
+    assert got == [("a", "a1"), ("a", "tick"), ("b", "b1"),
+                   ("a", "tick"), ("b", "b2-late"),
+                   ("a", "a4"), ("b", "b3")]
+    assert stub.resumed[0] == "" and all(i.startswith("v1.") for i in stub.resumed[1:])
+
+
+def test_against_a_stub_gateway_with_timestamp_ids_nothing_repeats_and_the_limit_remains():
+    got, stub = follow_stub(cursors=False)
+    # No repeats and the second identical "tick" arrives. b2-late is more than five
+    # seconds older than the newest line when the stream resumes: without a gateway
+    # cursor it is lost, which is the documented limit of this mode.
+    assert got == [("a", "a1"), ("a", "tick"), ("b", "b1"),
+                   ("a", "tick"),
+                   ("a", "a4"), ("b", "b3")]
+    assert stub.resumed == ["", "2026-11-24T10:00:14.999999999Z", "2026-11-24T10:00:14.999999999Z"]
+
+
+def test_the_cursor_reports_the_resume_mode_and_a_fallback_only_after_a_gateway_cursor():
+    cursor = LogCursor()
+    assert cursor.fallback() == "" and cursor.resume("") == "" and not cursor.exact
+    cursor.connected()
+    assert cursor.accept(ApplicationLogLine(pod="p", time="2026-11-24T10:00:10.5Z", line="x"))
+    assert cursor.resume("2026-11-24T10:00:10.5Z") == "2026-11-24T10:00:05.499999999Z" and not cursor.exact
+    assert cursor.fallback() == "", "a refused timestamp has nothing to fall back to"
+    assert cursor.resume("v1.opaque") == "v1.opaque" and cursor.exact
+    assert cursor.fallback() == "2026-11-24T10:00:10.5Z"
+    cursor.connected()
+    assert cursor.accept(ApplicationLogLine(pod="p", time="2026-11-24T10:00:10.5Z", line="x")), "not filtered"
+
+
 # The resume point and the cursor are pure functions.
 
 def test_rewind_steps_back_one_nanosecond_in_the_gateways_format():
@@ -327,6 +503,26 @@ async def test_the_async_client_follows_resumes_and_ends():
         got = [e.line async for e in c.follow_application_logs("billing", on_end=reasons.append)]
     assert got == ["a", "a", "b"] and reasons == ["all pod log streams closed"]
     assert seen[1].headers["Last-Event-ID"] == "2026-11-24T09:59:55.099999999Z"
+
+
+@pytest.mark.asyncio
+async def test_the_async_client_resumes_from_a_gateway_cursor_and_falls_back_when_refused():
+    answers = [sse(log("2026-11-24T10:00:10Z", "a", id="v1.one"), SLICE),
+               sse(log("2026-11-24T10:00:10Z", "a", id="v1.two"), SLICE),
+               refused(),
+               sse(log("2026-11-24T10:00:10Z", "a"), log("2026-11-24T10:00:10Z", "a"),
+                   log("2026-11-24T10:00:11Z", "b"), DONE)]
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return answers[len(seen) - 1]
+
+    async with AsyncKiongaClient("http://gateway", transport=httpx.MockTransport(handler)) as c:
+        got = [e.line async for e in c.follow_application_logs("billing")]
+    assert got == ["a", "a", "b"]
+    assert [r.headers.get("Last-Event-ID") for r in seen] == [
+        None, "v1.one", "v1.two", "2026-11-24T10:00:04.999999999Z"]
 
 
 @pytest.mark.asyncio

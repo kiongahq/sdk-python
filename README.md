@@ -189,15 +189,24 @@ Errors print as `kionga: <reason>` and exit with status 1. `kionga apps logs
 yields `ApplicationLogLine` objects (`pod`, `container`, `time`, `line`) from the
 gateway's Server-Sent Events stream, as a generator on `KiongaClient` and an async
 iterator on `AsyncKiongaClient`. It starts with the last `tail` lines of each pod
-(1 to 2000, default 200), or the lines after `since` (an RFC 3339 time or a
-timezone-aware `datetime`). The gateway follows at most 20 pods and closes a stream
-after `max_seconds` (1 to 3600, default 600); the client reopens it from five
-seconds before the newest line it delivered, so a slower pod's late line is still
-caught and the resend is dropped: no repeats, and a line is lost only if the gateway
-delivers it more than five seconds late. Identical lines are
+(1 to 2000, default 200; a few more when several lines share the timestamp of the
+first), or the lines after `since` (an RFC 3339 time or a timezone-aware
+`datetime`). The gateway follows at most 20 pods and closes a stream
+after `max_seconds` (1 to 3600, default 600); the client reopens it with the cursor
+the gateway sent with the last line. The cursor records what each pod has delivered,
+so every pod continues exactly after its own last line: no repeats and no gaps, even
+when one pod delivers a line long after a newer line from another. Identical lines are
 never merged: two pods logging the same text, or one pod logging it twice in the
 same instant, each arrive. The gateway's own "log stream unavailable" notices carry
-no timestamp, so they can't be placed and arrive every time they are sent. A dropped connection is retried with the client's
+no timestamp, so they can't be placed and arrive every time they are sent.
+
+A gateway from before the cursor sends a timestamp with each line instead, and the
+client detects that from the id. It then reopens the stream from five seconds before
+the newest line it delivered and drops the resend: still no repeats, but a line is
+lost if the gateway delivers it more than five seconds late. If a gateway refuses a
+cursor (an older replica during an upgrade), the client continues in this mode.
+
+A dropped connection is retried with the client's
 `RetryPolicy`. The iterator ends when the pods' logs are finished (no pods running,
 or every log stream closed, for example after a rollout) and passes the gateway's
 reason to `on_end`; follow again with `since` set to the last `line.time` to pick up

@@ -59,20 +59,32 @@ applications call turns the gateway's `not_configured` answer into
 installs; it keeps the status error class, so `ConflictError` handlers still catch it.
 
 Followed logs (`follow_application_logs`) ride on `_stream`. The gateway ends a log
-stream after `max_seconds` and resumes from a single instant, skipping every line at
-or before the `Last-Event-ID`. Pods stream concurrently, so a slower pod can still
-owe a line older than the newest one delivered. A plain resume would lose it, and
-resuming from the last event would resend lines the client already has. The client
-therefore resumes `RESUME_OVERLAP_NS` (5 seconds) before the newest instant
-delivered, and `LogCursor` removes the resend: per instant, pod, container and text
-it counts the lines delivered inside that window and skips that many of the resend,
-wherever in the new connection they arrive. Nothing is deduplicated by text alone,
-so identical lines all arrive, and the state is bounded by the lines in the window.
-Limits that remain: a line the gateway delivers more than five seconds after a
-newer line from another pod is lost on a reconnect (closing that needs a per-pod
-cursor in the gateway), and lines with no kubelet timestamp (the gateway's own "log
-stream unavailable" notices) carry no id, cannot be placed and arrive every time they
-are sent.
+stream after `max_seconds`, and pods stream concurrently, so a slower pod can still
+owe a line older than the newest one delivered. `LogCursor` decides how to resume
+from the shape of the last event id.
+
+A current gateway sends an opaque per-pod cursor as the id (anything that is not an
+RFC 3339 timestamp). It records the last line delivered for each pod and container,
+so the client sends it back unchanged in `Last-Event-ID`, the gateway continues each
+pod exactly after its own last line, and the client filters nothing. No overlap is
+requested and no line is lost or repeated, however late a pod delivers it.
+
+A gateway from before the cursor sends a timestamp as the id and resumes from a
+single instant, skipping every line at or before it. A plain resume would lose the
+slower pod's line, and resuming from the last event would resend lines the client
+already has. The client therefore resumes `RESUME_OVERLAP_NS` (5 seconds) before the
+newest instant delivered, and `LogCursor` removes the resend: per instant, pod,
+container and text it counts the lines delivered inside that window and skips that
+many of the resend, wherever in the new connection they arrive. Nothing is
+deduplicated by text alone, so identical lines all arrive, and the state is bounded
+by the lines in the window. The window is kept in both modes: when a gateway answers
+a cursor with 400 (an older replica during an upgrade), the follow restarts from the
+newest instant delivered and continues in timestamp mode.
+
+Limits that remain: against a gateway without cursors, a line delivered more than
+five seconds after a newer line from another pod is lost on a reconnect. In both
+modes, lines with no kubelet timestamp (the gateway's own "log stream unavailable"
+notices) carry no id, cannot be placed and arrive every time they are sent.
 `end` with a `max_seconds` reason reopens the stream; any other reason ends the
 iterator and goes to `on_end`. `LogCursor`, `rewind` and `instant` are pure and
 tested directly.
