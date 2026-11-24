@@ -98,3 +98,37 @@ def test_a_run_as_user_the_gateway_would_refuse_is_rejected_before_sending(value
     with pytest.raises(ValueError, match=message):
         c.deploy_function("p-1", "resize", "i", run_as_user=value)
     assert seen == []
+
+
+def test_visibility_and_labels_are_sent_so_a_redeploy_does_not_reset_them():
+    # The gateway replaces the whole function on a deploy. Without these arguments a
+    # redeploy from the SDK could only send the default, and a public function
+    # became internal again.
+    c, seen = client()
+    c.deploy_function("p-1", "resize", "ghcr.io/acme/resize:2", visibility="public",
+                      labels={"team": "media", "tier": ""})
+    sent = json.loads(seen[0].content)
+    assert sent["visibility"] == "public" and sent["labels"] == {"team": "media", "tier": ""}
+    for visibility in ("internal", "sso"):
+        c.deploy_function("p-1", "resize", "i", visibility=visibility)
+        assert json.loads(seen[-1].content)["visibility"] == visibility
+    c.deploy_function("p-1", "resize", "i", labels={})
+    assert json.loads(seen[-1].content)["labels"] == {}
+
+
+def test_a_function_reports_its_visibility_and_labels():
+    fn = kionga.Function.model_validate({**FUNCTION, "visibility": "public", "labels": {"team": "media"}})
+    assert fn.visibility == "public" and fn.labels == {"team": "media"}
+    bare = kionga.Function.model_validate(FUNCTION)
+    assert bare.visibility == "" and bare.labels == {}
+
+
+@pytest.mark.parametrize("fields, message", [
+    ({"visibility": "private"}, "visibility"), ({"visibility": ""}, "visibility"),
+    ({"labels": ["team"]}, "labels"), ({"labels": {"team": 1}}, "labels"), ({"labels": {"": "x"}}, "labels"),
+])
+def test_an_invalid_visibility_or_labels_is_rejected_before_sending(fields, message):
+    c, seen = client()
+    with pytest.raises(ValueError, match=message):
+        c.deploy_function("p-1", "resize", "i", **fields)
+    assert seen == []

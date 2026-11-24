@@ -130,6 +130,27 @@ FUNCTION_REPLICAS = (0, 5)
 MAX_WORKLOAD_REPLICAS = 100
 
 
+# Who can reach a workload: "public" (anyone at its host), "sso" (signed-in users,
+# through the gateway) or "internal" (no host: callers inside the cluster only).
+VISIBILITIES = ("public", "sso", "internal")
+
+
+def function_exposure_body(labels: object, visibility: object) -> dict:
+    """``labels`` and ``visibility`` for a function deploy, or ``{}`` for what is
+    left out. Raises ``ValueError``."""
+    body: dict = {}
+    if labels is not None:
+        if not isinstance(labels, dict) or not all(
+                isinstance(key, str) and key and isinstance(value, str) for key, value in labels.items()):
+            raise ValueError("labels must map label names to text values")
+        body["labels"] = dict(labels)
+    if visibility is not None:
+        if visibility not in VISIBILITIES:
+            raise ValueError(f"visibility must be one of {list(VISIBILITIES)}")
+        body["visibility"] = visibility
+    return body
+
+
 # The gateway's limit on run_as_user: a non-root numeric user id.
 MAX_RUN_AS_USER = 2147483647
 
@@ -179,11 +200,14 @@ class Function(BaseModel):
     status: str
     replicas: int = 0
     env_vars: dict[str, str] = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
     annotations: dict[str, str] = Field(default_factory=dict)
     cpu: str | None = None
     memory: str | None = None
     replica_range: dict[str, int] | None = None
     scaling: Scaling | None = None
+    # "internal", "sso" or "public"; "" when the gateway does not report it.
+    visibility: str = ""
     # The numeric user the function runs as on Kubernetes; None is the image's own.
     run_as_user: int | None = None
     message: str = ""

@@ -125,7 +125,8 @@ gateway's pipeline-definition API.
 ### `kionga/llm.py`
 
 `build_chat_model(backend, model, ...)` returns a LangChain chat model for
-`openai`, `anthropic`, `openai-compatible` or `mock`, reading `KIONGA_LLM_BACKEND`,
+`openai`, `anthropic`, `openai-compatible`, `self-hosted` (an alias of
+`openai-compatible`) or `mock`, reading `KIONGA_LLM_BACKEND`,
 `KIONGA_LLM_MODEL`, `KIONGA_LLM_BASE_URL` and the provider keys from the
 environment. `mock` is deterministic and is what gate tests use.
 

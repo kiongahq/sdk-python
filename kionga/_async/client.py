@@ -20,6 +20,7 @@ from ..models import (
     ModelDeploymentFailed,
     ModelDeploymentTimeout,
     Scaling,
+    function_exposure_body,
     function_scaling_body,
     run_as_user_value,
     scaling_body,
@@ -180,19 +181,28 @@ class AsyncKiongaClient(ApplicationsAPI, TeamsAPI, DataAPI, StreamingAPI):
         self, project_id: str, name: str, image: str, *, cpu: str = "500m", memory: str = "512Mi",
         env_vars: dict[str, str] | None = None, annotations: dict[str, str] | None = None,
         min_replicas: int | None = None, max_replicas: int | None = None, scaling: Scaling | dict | None = None,
-        run_as_user: int | None = None,
+        run_as_user: int | None = None, labels: dict[str, str] | None = None,
+        visibility: str | None = None,
     ) -> Function:
         """Deploy a function. On Kubernetes, ``min_replicas`` and ``max_replicas``
         bound its autoscaling (the gateway defaults to 0 to 5, so it scales to zero)
         and ``scaling`` picks the trigger: ``requests`` (the default) or ``cpu``,
         which needs ``min_replicas`` of 1 or more. Compose installs ignore both.
 
+        ``visibility`` says who can reach it: ``"internal"`` (the gateway's default:
+        no host, callers inside the cluster only), ``"sso"`` (signed-in users) or
+        ``"public"``. ``labels`` are recorded on the function.
+
         ``run_as_user`` (Kubernetes only) is the numeric user the function runs as,
         1 to 2147483647 and never 0: set it when the image runs as root or names its
-        user instead of numbering it. Deploying again replaces the whole function,
-        so pass it on every deploy that should keep it."""
+        user instead of numbering it.
+
+        Deploying again replaces the whole function: whatever is left out goes back
+        to the gateway's default. Pass ``visibility``, ``labels`` and ``run_as_user``
+        on every deploy that should keep them."""
         body = {"project_id": project_id, "name": name, "image": image, "cpu": cpu, "memory": memory,
                 "env_vars": env_vars or {}, "annotations": annotations or {},
+                **function_exposure_body(labels, visibility),
                 **function_scaling_body(min_replicas, max_replicas, scaling)}
         user = run_as_user_value(run_as_user)
         if user is not None:

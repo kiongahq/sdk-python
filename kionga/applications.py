@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import ConflictError, NotConfiguredError, ServerError
-from .models import SCALING_METRICS, Scaling, run_as_user_value, scaling_body
+from .models import SCALING_METRICS, VISIBILITIES, Scaling, run_as_user_value, scaling_body
 from .sse import ServerSentEvent, StreamError
 
 __all__ = [
@@ -45,11 +45,12 @@ __all__ = [
 ]
 
 # A name becomes the first label of the application's host name, so it must be a
-# DNS label: lower case letters, digits and hyphens, starting with a letter.
-NAME = re.compile(r"^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$")
+# DNS label: lower case letters, digits and hyphens, starting with a letter. The
+# gateway allows 45 characters, not 63: the operator appends suffixes such as
+# -build-<hash>, -route and -sso and the result must still be a DNS label.
+MAX_NAME_LENGTH = 45
+NAME = re.compile(r"^[a-z]([-a-z0-9]{0,%d}[a-z0-9])?$" % (MAX_NAME_LENGTH - 2))
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-# "internal" gives the application no host: only callers inside the cluster reach it.
-VISIBILITIES = ("public", "sso", "internal")
 MAX_REPLICAS = 100
 MAX_LOG_TAIL = 2000
 MAX_FOLLOW_SECONDS = 3600
@@ -564,7 +565,7 @@ def application_body(
     if not name or not NAME.match(name):
         raise ValueError(
             f"name {name!r} must be a DNS label: lower case letters, digits and hyphens, "
-            "starting with a letter, at most 63 characters")
+            f"starting with a letter, at most {MAX_NAME_LENGTH} characters")
     if bool(image) == (source is not None):
         raise ValueError("give exactly one of image or source")
     body: dict[str, Any] = {"project_id": project_id, "name": name}
