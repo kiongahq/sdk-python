@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.3](https://github.com/kiongahq/sdk-python/compare/v0.3.2...v0.3.3) (2026-11-24)
+
+
+### Features
+
+* follow application logs, kionga apps logs --follow, scaling on deploy_agent_version ([#62](https://github.com/kiongahq/sdk-python/issues/62)) ([ca385cf](https://github.com/kiongahq/sdk-python/commit/ca385cff58d0a00ce209d4aa69fe7fabcfb107de))
+* resume followed logs from the gateway's per-pod cursor ([9e5d2fd](https://github.com/kiongahq/sdk-python/commit/9e5d2fd86386d5ad8ca4604b6cbe70108e1b68f8))
+* run_as_user on applications and functions, kept across updates ([cc58eae](https://github.com/kiongahq/sdk-python/commit/cc58eae654988775788e92ebe8734e9387074a8b))
+* visibility and labels on deploy_function, and the gateway's 45-character name limit ([f743685](https://github.com/kiongahq/sdk-python/commit/f7436850b2fa265e02f8fae3545644de43b9fee6))
+
 ## [0.3.2](https://github.com/kiongahq/sdk-python/compare/v0.3.1...v0.3.2) (2026-11-23)
 
 
