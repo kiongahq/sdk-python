@@ -173,7 +173,7 @@ every deploy that should keep it. `Application.run_as_user` and
 Also `list_applications`, `get_application`, `redeploy_application`,
 `application_events` (newest first) and `delete_application`. Logs are the recent
 lines of each pod. Invalid fields, such as a name
-that is not a DNS label or `max_replicas` below `min_replicas`, raise `ValueError`
+that is not a DNS label of at most 45 characters or `max_replicas` below `min_replicas`, raise `ValueError`
 before anything is sent.
 
 The `kionga` command does the same from a terminal (`python -m kionga` works too):
@@ -252,6 +252,13 @@ On Kubernetes, `deploy_function` takes `min_replicas`, `max_replicas` (the gatew
 defaults to 0 to 5, so a function scales to zero) and the same `scaling`; `cpu`
 scaling needs `min_replicas` of 1 or more. `Function.replica_range`,
 `Function.scaling` and `Function.message` report them. Compose installs ignore them.
+
+`deploy_function` also takes `visibility` (`internal`, the gateway's default, gives
+the function no host; `sso` and `public` expose it) and `labels`, reported as
+`Function.visibility` and `Function.labels`. A deploy replaces the whole function,
+so whatever you leave out goes back to the default: a redeploy without `visibility`
+makes a public function internal again. Pass `visibility`, `labels` and
+`run_as_user` on every deploy that should keep them.
 
 ### Async
 

@@ -44,7 +44,7 @@ def parser() -> argparse.ArgumentParser:
     app_commands = apps.add_subparsers(dest="apps_command", required=True)
 
     deploy = app_commands.add_parser("deploy", help="deploy a new application")
-    deploy.add_argument("name", help="DNS label; the application is served at <name>.<install domain>")
+    deploy.add_argument("name", help="DNS label of at most 45 characters; the application is served at <name>.<install domain>")
     deploy.add_argument("--project", required=True, help="project id")
     _spec_arguments(deploy, create=True)
     _wait_arguments(deploy)

@@ -114,6 +114,8 @@ def test_one_replica_bound_fills_the_other_because_the_gateway_needs_both(given,
     ({"name": "Billing"}, "DNS label"),
     ({"name": "1st"}, "DNS label"),
     ({"name": "a" * 64}, "DNS label"),
+    ({"name": "a" * 46}, "at most 45 characters"),  # the gateway's limit, below a DNS label's 63
+    ({"name": "a" * 44 + "-"}, "DNS label"),
     ({"image": None}, "exactly one of image or source"),
     ({"source": {"git": "https://x"}}, "exactly one of image or source"),
     ({"port": 0}, "port"),
@@ -139,6 +141,14 @@ def test_invalid_fields_are_rejected_before_anything_is_sent(fields, message):
     with pytest.raises(ValueError, match=message):
         c.create_application(args.pop("project_id"), args.pop("name"), **args)
     assert gw.seen == []
+
+
+def test_the_longest_name_the_gateway_accepts_is_sent():
+    c, gw = client({("POST", BASE): ok(app(name="a" * 45), 201)})
+    c.create_application("p-1", "a" * 44 + "9", image="i")
+    assert gw.body()["name"] == "a" * 44 + "9"
+    c.create_application("p-1", "a", image="i")
+    assert gw.body()["name"] == "a"
 
 
 def test_gateway_validation_errors_carry_its_code_and_message():
