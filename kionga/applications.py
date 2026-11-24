@@ -288,29 +288,38 @@ def rewind(stamp: str) -> str:
     return _before(at)
 
 
-# A reconnect resumes this far before the newest instant delivered, so a line a slower
-# pod had not yet sent when the connection broke is still recovered. The overlap is
-# resent and removed again by ``LogCursor``.
+# Against a gateway whose event ids are plain timestamps, a reconnect resumes this far
+# before the newest instant delivered, so a line a slower pod had not yet sent when the
+# connection broke is still recovered. The overlap is resent and removed again by
+# ``LogCursor``. A gateway that sends cursor ids needs none of it.
 RESUME_OVERLAP_NS = 5_000_000_000
 
 
 class LogCursor:
-    """Decides which lines of a followed stream are new, across reconnects.
+    """Decides where a followed stream resumes and which lines are new.
 
-    A line is identified by its instant, pod, container and text. The gateway
-    resumes from a single instant, but pods stream concurrently, so a reconnect
-    resumes ``RESUME_OVERLAP_NS`` before the newest instant delivered (``resume``):
-    a line a slower pod had not yet sent is recovered, and the gateway resends the
-    lines already delivered in that window. The cursor counts, per instant, pod,
-    container and text, how many it delivered in the window and skips that many of the
-    resend wherever in the new connection they arrive. Identical lines, from one pod
-    or several, are delivered as many times as they occurred: nothing is deduplicated
-    by text alone. State is bounded by the lines in the window. Call ``connected``
-    whenever a connection opens.
+    The gateway's event ids come in two shapes, told apart by ``instant``:
 
-    Not recoverable: a line the gateway sent later than the window after a newer
-    line, and a line with no instant (the gateway's own "log stream unavailable"
-    notice), which can't be placed and is delivered each time it is sent.
+    * An opaque cursor (anything that is not an RFC 3339 timestamp). It records
+      what each pod has delivered, so ``resume`` sends it back unchanged, the
+      gateway continues every pod exactly after its own last line, and nothing is
+      filtered here.
+    * A plain timestamp, from a gateway without cursors. It resumes from a single
+      instant, but pods stream concurrently, so ``resume`` goes back
+      ``RESUME_OVERLAP_NS`` before the newest instant delivered: a line a slower pod
+      had not yet sent is recovered, and the gateway resends the lines already
+      delivered in that window. The cursor counts, per instant, pod, container and
+      text, how many it delivered in the window and skips that many of the resend
+      wherever in the new connection they arrive. Identical lines, from one pod or
+      several, are delivered as many times as they occurred: nothing is
+      deduplicated by text alone. Not recoverable in this mode: a line the gateway
+      sent later than the window after a newer line.
+
+    The window is tracked in both modes (bounded by the lines in it), so the follow
+    can move to timestamps if a gateway refuses a cursor (``fallback``). Call
+    ``connected`` whenever a connection opens. A line with no instant (the
+    gateway's own "log stream unavailable" notice) can't be placed and is delivered
+    each time it is sent.
     """
 
     def __init__(self) -> None:
@@ -320,6 +329,7 @@ class LogCursor:
         self._replayed: Counter[tuple[int, str, str, str]] = Counter()
         self._floor: int | None = None
         self._limit = 1024
+        self.exact = False  # the connection being opened resumes from a gateway cursor
 
     def _window_start(self) -> int | None:
         return None if self.newest is None else max(self.newest - RESUME_OVERLAP_NS, 0)
@@ -331,16 +341,35 @@ class LogCursor:
 
     def connected(self) -> None:
         self._prune()
-        self._floor = self._window_start()
-        self._carry = Counter(self._delivered)
+        # After an exact resume the gateway resends nothing, so nothing is filtered.
+        self._floor = None if self.exact else self._window_start()
+        self._carry = Counter() if self.exact else Counter(self._delivered)
         self._replayed = Counter()
 
     def resume(self, last_id: str) -> str:
-        """The ``Last-Event-ID`` to reconnect with: just before the start of the window."""
+        """The ``Last-Event-ID`` to reconnect with.
+
+        A gateway cursor goes back unchanged. A timestamp id becomes the instant just
+        before the start of the overlap window.
+        """
+        self.exact = bool(last_id) and instant(last_id) is None
+        if self.exact:
+            return last_id
         start = self._window_start()
         if start is None or start < 1:
             return last_id
         return _before((start // 1_000_000_000, start % 1_000_000_000))
+
+    def fallback(self) -> str:
+        """A timestamp id to resume from when the gateway refused the cursor, or ``""``.
+
+        A cursor can reach a gateway that does not know it, such as an older replica
+        during an upgrade. The newest instant delivered stands in for it, and
+        ``resume`` then applies the overlap window.
+        """
+        if not self.exact or self.newest is None:
+            return ""
+        return _before((0, self.newest + 1))
 
     def accept(self, line: ApplicationLogLine) -> bool:
         parsed = instant(line.time) if line.time else None

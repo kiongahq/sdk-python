@@ -68,8 +68,11 @@ class Pipeline:
     ) -> dict[str, Any]:
         """Compile to the control-plane pipeline-definition contract.
 
-        Pure function flows default to OpenFaaS execution; any container step
-        selects Prefect/KFP unless an explicit mode is supplied.
+        A flow of function steps only defaults to the ``functions`` execution mode,
+        which the gateway runs on its function runtime. Any container step selects
+        ``prefect``, which the gateway runs as Kubernetes Jobs on a Kubernetes
+        install and through Prefect on Compose. An explicit mode overrides both;
+        the gateway accepts no other mode.
         """
         if not self.steps:
             raise ValueError("pipeline must contain at least one step")

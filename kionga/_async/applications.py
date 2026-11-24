@@ -26,7 +26,7 @@ from ..applications import (
     log_stream_params,
 )
 from ..data import _items, _name
-from ..errors import NotConfiguredError
+from ..errors import BadRequestError, NotConfiguredError
 
 __all__ = ["ApplicationsAPI"]
 
@@ -181,10 +181,15 @@ class ApplicationsAPI:
         Starts with the last ``tail`` lines (1 to 2000, default 200) of each pod, or
         with the lines after ``since`` (an RFC 3339 timestamp or a timezone-aware
         datetime). The gateway streams at most 20 pods and closes the stream after
-        ``max_seconds`` (1 to 3600, default 600); this reopens it from five seconds
-        before the newest line delivered and drops the resend, so a long follow has no
-        repeats, identical lines are all delivered, and a line is lost only if the
-        gateway delivers it more than five seconds late. Dropped connections are retried with the client's policy.
+        ``max_seconds`` (1 to 3600, default 600); this reopens it with the cursor the
+        gateway sent with the last line, and every pod continues exactly after its own
+        last line: a long follow has no repeats and no gaps, and identical lines are
+        all delivered. Dropped connections are retried with the client's policy.
+
+        A gateway without cursors sends timestamps instead. The stream is then
+        reopened from five seconds before the newest line delivered and the resend is
+        dropped; a line is lost only if the gateway delivers it more than five seconds
+        late.
 
         The iterator ends when the pods' logs finish (no pods are running, or every
         log stream closed, such as after a rollout); ``on_end`` then receives the
@@ -193,26 +198,34 @@ class ApplicationsAPI:
         """
         params = log_stream_params(tail=tail, container=container, since=since, max_seconds=max_seconds)
         cursor = LogCursor()
-        stream = self._stream(f"{BASE}/{_name(name)}/logs", params=params, resume=cursor.resume,
-                              on_connect=cursor.connected)
-        try:
-            async for event in stream:
-                if event.event == "end":
-                    reason = end_reason(event)
-                    if reason.startswith(SLICE_END):
-                        continue  # the time slice is used up: the stream reopens
-                    if on_end:
-                        on_end(reason)
-                    return
-                if event.event != "log":
-                    continue
-                line = log_line(event)
-                if cursor.accept(line):
-                    yield line
-        except NotConfiguredError as error:
-            raise ApplicationsNotConfiguredError.from_error(error) from None
-        finally:
-            await stream.aclose()
+        last_id = ""
+        while True:
+            stream = self._stream(f"{BASE}/{_name(name)}/logs", params=params, last_id=last_id,
+                                  resume=cursor.resume, on_connect=cursor.connected)
+            try:
+                async for event in stream:
+                    if event.event == "end":
+                        reason = end_reason(event)
+                        if reason.startswith(SLICE_END):
+                            continue  # the time slice is used up: the stream reopens
+                        if on_end:
+                            on_end(reason)
+                        return
+                    if event.event != "log":
+                        continue
+                    line = log_line(event)
+                    if cursor.accept(line):
+                        yield line
+            except NotConfiguredError as error:
+                raise ApplicationsNotConfiguredError.from_error(error) from None
+            except BadRequestError:
+                # A gateway that does not know the cursor (an older replica during an
+                # upgrade) refuses it: carry on from the newest instant delivered.
+                last_id = cursor.fallback()
+                if not last_id:
+                    raise
+            finally:
+                await stream.aclose()
 
     async def wait_until_ready(self, name: str, *, timeout: float = 600.0,
                          poll_interval: float = 3.0, generation: int | None = None) -> Application:
