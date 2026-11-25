@@ -16,7 +16,7 @@ kionga = "kionga.cli:main"
 [project.optional-dependencies]
 agno = ["agno>=2,<3"]
 nooa = ["nooa>=0.0.7,<0.1"]
-huggingface = ["huggingface-hub>=0.34,<2"]
+huggingface = ["huggingface-hub>=0.34,<3"]
 agents = [
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=2.0",
